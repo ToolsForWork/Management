@@ -1,0 +1,1497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Estimation Management Planner</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      box-sizing: border-box;
+    }
+
+    header {
+      padding: 10px 15px;
+      background: #1f2933;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .week-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .week-controls button {
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+
+    .container {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .chart-column {
+      width: 50%;
+      padding: 10px;
+      box-sizing: border-box;
+      overflow: hidden;
+      border-right: 1px solid #ddd;
+      background: #ffffff;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .chart-header-line {
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    .chart-legend {
+      font-size: 11px;
+      max-height: 80px;
+      overflow-y: auto;
+      border: 1px solid #e5e7eb;
+      padding: 4px;
+      border-radius: 4px;
+      background: #f9fafb;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-bottom: 2px;
+    }
+
+    .legend-color {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      border: 1px solid #cbd5e1;
+    }
+
+    .jobs-column {
+      width: 20%;
+      padding: 10px;
+      box-sizing: border-box;
+      overflow-y: auto;
+      border-right: 1px solid #ddd;
+      background: #f9fafb;
+    }
+
+    .employees-column {
+      width: 30%;
+      padding: 10px;
+      box-sizing: border-box;
+      overflow-y: auto;
+      background: #ffffff;
+    }
+
+    .divider {
+      width: 5px;
+      background: #cbd5e1;
+      cursor: col-resize;
+    }
+
+    .divider:hover {
+      background: #94a3b8;
+    }
+
+    h2 {
+      margin-top: 0;
+      font-size: 16px;
+    }
+
+    .list {
+      margin-top: 10px;
+    }
+
+    .item {
+      background: #ffffff;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 6px 8px;
+      margin-bottom: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      cursor: grab;
+    }
+
+    .item-header-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .item-header-row span {
+      flex: 1;
+    }
+
+    .item-header-row button {
+      margin-left: 4px;
+      padding: 2px 6px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .form-inline {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+
+    .form-inline input,
+    .form-inline select {
+      padding: 4px 6px;
+      font-size: 12px;
+    }
+
+    .form-inline button {
+      padding: 4px 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .employee-card {
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 8px;
+      margin-bottom: 10px;
+      background: #f8fafc;
+    }
+
+    .employee-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      gap: 6px;
+    }
+
+    .employee-name {
+      font-weight: bold;
+    }
+
+    .employee-budget {
+      font-size: 12px;
+      color: #555;
+    }
+
+    .employee-district {
+      font-size: 11px;
+      color: #6b7280;
+    }
+
+    .employee-district select {
+      font-size: 11px;
+      padding: 2px 4px;
+    }
+
+    .gauge {
+      position: relative;
+      height: 12px;
+      background: #e5e7eb;
+      border-radius: 6px;
+      overflow: hidden;
+      margin-bottom: 6px;
+    }
+
+    .gauge.over-budget {
+      box-shadow: 0 0 0 2px #ef4444 inset;
+    }
+
+    .gauge-fill {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+    }
+
+    .gauge-label {
+      font-size: 11px;
+      color: #444;
+      margin-bottom: 6px;
+    }
+
+    .employee-dropzone {
+      min-height: 40px;
+      border: 1px dashed #cbd5e1;
+      border-radius: 4px;
+      padding: 4px;
+      background: #f9fafb;
+    }
+
+    .employee-dropzone.over {
+      background: #e0f2fe;
+      border-color: #38bdf8;
+    }
+
+    .assignment {
+      background: #ffffff;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      padding: 4px 6px;
+      margin-bottom: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 12px;
+    }
+
+    .assignment-top {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .assignment input[type="number"] {
+      width: 60px;
+      padding: 2px 4px;
+      font-size: 11px;
+    }
+
+    .assignment button {
+      padding: 2px 4px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .subtask-list {
+      margin-left: 10px;
+      margin-top: 4px;
+    }
+
+    .subtask-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      background: #eef2ff;
+      padding: 2px 4px;
+      margin-bottom: 2px;
+      border-radius: 3px;
+    }
+
+    .subtask-row input[type="number"] {
+      width: 50px;
+      font-size: 11px;
+    }
+
+    .subtask-row input[type="color"] {
+      width: 30px;
+      padding: 0;
+      border: none;
+      background: transparent;
+    }
+
+    .employee-card.collapsed .employee-dropzone,
+    .employee-card.collapsed .gauge,
+    .employee-card.collapsed .gauge-label {
+      display: none;
+    }
+
+    footer.toolbar-footer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #1f2933;
+      padding: 10px;
+      display: flex;
+      justify-content: center;
+      border-top: 1px solid #444;
+      z-index: 10;
+    }
+
+    footer .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      color: #000;
+    }
+
+    footer .toolbar button {
+      color: #000;
+      background: #e5e7eb;
+      border: 1px solid #9ca3af;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    footer .toolbar label {
+      color: #fff;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    footer .toolbar input[type="file"] {
+      color: #fff;
+      font-size: 11px;
+      margin-left: 6px;
+    }
+
+    #projectChart {
+      width: 100%;
+      height: 260px;
+      background: #fff;
+      border: 1px solid #ddd;
+      display: block;
+    }
+
+    .job-category-header {
+      font-weight: bold;
+      background: #e2e8f0;
+      padding: 6px;
+      cursor: pointer;
+      margin-top: 10px;
+      border-radius: 4px;
+    }
+
+    .job-category-list {
+      margin-top: 4px;
+    }
+
+    .job-category-section.collapsed .job-category-list {
+      display: none;
+    }
+
+    .job-subtasks {
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px dashed #e5e7eb;
+      font-size: 11px;
+    }
+
+    .job-subtask-category-header {
+      font-weight: bold;
+      margin-top: 4px;
+      cursor: pointer;
+    }
+
+    .job-subtask-category.collapsed .job-subtask-items {
+      display: none;
+    }
+
+    .job-subtask-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 2px;
+    }
+
+    .job-subtask-row span {
+      flex: 1;
+    }
+
+    .job-subtask-row input[type="color"] {
+      width: 30px;
+      padding: 0;
+      border: none;
+      background: transparent;
+    }
+
+    .job-subtask-add {
+      display: flex;
+      gap: 4px;
+      margin-top: 4px;
+      flex-wrap: wrap;
+    }
+
+    .job-subtask-add input,
+    .job-subtask-add select {
+      font-size: 11px;
+      padding: 2px 4px;
+    }
+
+    .job-subtask-add button {
+      font-size: 11px;
+      padding: 2px 6px;
+      cursor: pointer;
+    }
+
+    .district-header {
+      font-weight: bold;
+      margin-top: 10px;
+      margin-bottom: 4px;
+      padding: 4px 6px;
+      background: #e5e7eb;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    @media (max-width: 1000px) {
+      .container {
+        flex-direction: column;
+      }
+      .chart-column,
+      .jobs-column,
+      .employees-column {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid #ddd;
+      }
+      .divider {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Estimation Management Planner</h1>
+  <div class="week-controls">
+    <button id="prevWeekBtn">&lt; Prev</button>
+    <span id="weekLabel"></span>
+    <button id="nextWeekBtn">Next &gt;</button>
+  </div>
+</header>
+
+<div class="container">
+  <!-- Chart column -->
+  <div class="chart-column">
+    <h2>Project Allocation</h2>
+    <div id="chartHeaderLine" class="chart-header-line"></div>
+    <canvas id="projectChart"></canvas>
+    <div id="chartLegend" class="chart-legend"></div>
+  </div>
+
+  <div class="divider" id="divider1"></div>
+
+  <!-- Jobs column -->
+  <div class="jobs-column">
+    <h2>Jobs</h2>
+    <div class="form-inline">
+      <input type="text" id="jobNameInput" placeholder="Job name" />
+      <select id="jobCategoryInput">
+        <option>Active</option>
+        <option>Upcoming</option>
+        <option>Complete</option>
+      </select>
+      <input type="color" id="jobColorInput" value="#3b82f6" title="Job color" />
+      <button id="addJobBtn">Add Job</button>
+    </div>
+    <div id="jobsList"></div>
+  </div>
+
+  <div class="divider" id="divider2"></div>
+
+  <!-- Employees column -->
+  <div class="employees-column">
+    <h2>Employees</h2>
+    <div class="form-inline">
+      <input type="text" id="employeeNameInput" placeholder="Employee name" />
+      <input type="number" id="employeeBudgetInput" placeholder="Weekly hours" min="1" />
+      <select id="employeeDistrictInput">
+        <option>Electrical</option>
+        <option>Instrumentation</option>
+        <option>Flex</option>
+      </select>
+      <button id="addEmployeeBtn">Add Employee</button>
+    </div>
+    <div id="employeesList" class="list"></div>
+  </div>
+</div>
+
+<footer class="toolbar-footer">
+  <div class="toolbar">
+    <button id="exportCsvBtn">Export to CSV</button>
+    <button id="exportJsonBtn">Export JSON</button>
+    <label>
+      Import JSON
+      <input type="file" id="importJsonInput" accept=".json" />
+    </label>
+  </div>
+</footer>
+
+<script>
+  // ---------- Data model ----------
+  let data = {
+    employees: [],
+    jobs: [],
+    assignments: {},
+    currentWeekStart: startOfWeek(new Date())
+  };
+
+  function uuid() {
+    return 'xxxx-4xxx-yxxx-xxxx'.replace(/[xy]/g, c => {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+
+  function startOfWeek(date) {
+    const d = new Date(date);
+    const day = d.getDay();
+    const diff = (day === 0 ? -6 : 1) - day;
+    d.setDate(d.getDate() + diff);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  function formatDate(d) {
+    return d.toISOString().slice(0, 10);
+  }
+
+  function getWeekKey(date) {
+    return formatDate(startOfWeek(date));
+  }
+
+  function getCurrentWeekKey() {
+    return getWeekKey(data.currentWeekStart);
+  }
+
+  function getAssignmentsForWeek(weekKey) {
+    if (!data.assignments[weekKey]) data.assignments[weekKey] = {};
+    return data.assignments[weekKey];
+  }
+
+  function getEmployeeAssignmentsForWeek(weekKey, employeeId) {
+    const week = getAssignmentsForWeek(weekKey);
+    if (!week[employeeId]) week[employeeId] = {};
+    return week[employeeId];
+  }
+
+  // Only parent hours count toward totals
+  function totalHoursForEmployeeWeek(weekKey, employeeId) {
+    const empAssignments = getEmployeeAssignmentsForWeek(weekKey, employeeId);
+    let sum = 0;
+    Object.values(empAssignments).forEach(a => {
+      sum += (a.hours || 0);
+    });
+    return sum;
+  }
+
+  function totalHoursAllEmployees(weekKey) {
+    return data.employees.reduce((sum, emp) => {
+      return sum + totalHoursForEmployeeWeek(weekKey, emp.id);
+    }, 0);
+  }
+
+  function totalEmployeeCapacity() {
+    return data.employees.reduce((sum, emp) => sum + (emp.weeklyBudget || 0), 0);
+  }
+
+  function forceChartUpdate() {
+    setTimeout(renderProjectChart, 30);
+  }
+
+  // ---------- Rendering ----------
+  const weekLabelEl = document.getElementById('weekLabel');
+  const jobsListEl = document.getElementById('jobsList');
+  const employeesListEl = document.getElementById('employeesList');
+  const chartHeaderLineEl = document.getElementById('chartHeaderLine');
+  const chartLegendEl = document.getElementById('chartLegend');
+
+  function renderWeekLabel() {
+    const start = data.currentWeekStart;
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    weekLabelEl.textContent = `${formatDate(start)} to ${formatDate(end)}`;
+  }
+
+  function renderJobs() {
+    const container = jobsListEl;
+    container.innerHTML = '';
+
+    const categories = ["Active", "Upcoming", "Complete"];
+    const subCategories = ["Electrical", "Instrumentation", "Other"];
+
+    categories.forEach(cat => {
+      const section = document.createElement('div');
+      section.className = 'job-category-section';
+
+      const header = document.createElement('div');
+      header.className = 'job-category-header';
+      header.textContent = cat;
+      header.onclick = () => section.classList.toggle('collapsed');
+
+      const list = document.createElement('div');
+      list.className = 'job-category-list';
+
+      const jobsInCat = data.jobs.filter(j => j.category === cat);
+
+      jobsInCat.forEach(job => {
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.draggable = true;
+        div.dataset.jobId = job.id;
+
+        const headerRow = document.createElement('div');
+        headerRow.className = 'item-header-row';
+
+        const colorBox = document.createElement('div');
+        colorBox.className = 'legend-color';
+        colorBox.style.background = job.color || '#3b82f6';
+
+        const span = document.createElement('span');
+        span.textContent = job.name;
+
+        const colorInput = document.createElement('input');
+        colorInput.type = 'color';
+        colorInput.value = job.color || '#3b82f6';
+        colorInput.onchange = () => {
+          job.color = colorInput.value;
+          renderJobs();
+          forceChartUpdate();
+        };
+
+        const categorySelect = document.createElement('select');
+        ["Active", "Upcoming", "Complete"].forEach(c => {
+          const opt = document.createElement('option');
+          opt.value = c;
+          opt.textContent = c;
+          if (job.category === c) opt.selected = true;
+          categorySelect.appendChild(opt);
+        });
+        categorySelect.onchange = () => {
+          job.category = categorySelect.value;
+          renderJobs();
+          forceChartUpdate();
+        };
+
+        const collapseBtn = document.createElement('button');
+        collapseBtn.textContent = 'Toggle';
+        collapseBtn.onclick = () => {
+          div.classList.toggle('collapsed');
+        };
+
+        const removeBtn = document.createElement('button');
+        removeBtn.textContent = 'X';
+        removeBtn.onclick = () => {
+          removeJob(job.id);
+        };
+
+        headerRow.appendChild(colorBox);
+        headerRow.appendChild(span);
+        headerRow.appendChild(colorInput);
+        headerRow.appendChild(categorySelect);
+        headerRow.appendChild(collapseBtn);
+        headerRow.appendChild(removeBtn);
+
+        div.appendChild(headerRow);
+
+        // Subtasks template for this job
+        job.subtasks = job.subtasks || [];
+
+        const subtasksContainer = document.createElement('div');
+        subtasksContainer.className = 'job-subtasks';
+
+        subCategories.forEach(subCat => {
+          const catBlock = document.createElement('div');
+          catBlock.className = 'job-subtask-category';
+
+          const catHeader = document.createElement('div');
+          catHeader.className = 'job-subtask-category-header';
+          catHeader.textContent = subCat;
+          catHeader.onclick = () => catBlock.classList.toggle('collapsed');
+
+          const items = document.createElement('div');
+          items.className = 'job-subtask-items';
+
+          job.subtasks
+            .filter(st => st.category === subCat)
+            .forEach(st => {
+              const row = document.createElement('div');
+              row.className = 'job-subtask-row';
+
+              const nameSpan = document.createElement('span');
+              nameSpan.textContent = st.name;
+
+              const colorInput = document.createElement('input');
+              colorInput.type = 'color';
+              colorInput.value = st.color || job.color || '#3b82f6';
+              colorInput.onchange = () => {
+                st.color = colorInput.value;
+                renderJobs();
+              };
+
+              const delBtn = document.createElement('button');
+              delBtn.textContent = 'X';
+              delBtn.onclick = () => {
+                const index = job.subtasks.indexOf(st);
+                if (index >= 0) job.subtasks.splice(index, 1);
+                renderJobs();
+              };
+
+              row.appendChild(nameSpan);
+              row.appendChild(colorInput);
+              row.appendChild(delBtn);
+              items.appendChild(row);
+            });
+
+          const addRow = document.createElement('div');
+          addRow.className = 'job-subtask-add';
+
+          const nameInput = document.createElement('input');
+          nameInput.placeholder = 'Subtask name';
+
+          const colorPicker = document.createElement('input');
+          colorPicker.type = 'color';
+          colorPicker.value = job.color || '#3b82f6';
+
+          const addBtn = document.createElement('button');
+          addBtn.textContent = 'Add';
+          addBtn.onclick = () => {
+            if (!nameInput.value.trim()) return;
+            job.subtasks.push({
+              name: nameInput.value.trim(),
+              category: subCat,
+              color: colorPicker.value
+            });
+            nameInput.value = '';
+            renderJobs();
+          };
+
+          addRow.appendChild(nameInput);
+          addRow.appendChild(colorPicker);
+          addRow.appendChild(addBtn);
+
+          catBlock.appendChild(catHeader);
+          catBlock.appendChild(items);
+          catBlock.appendChild(addRow);
+
+          subtasksContainer.appendChild(catBlock);
+        });
+
+        div.appendChild(subtasksContainer);
+
+        div.addEventListener('dragstart', e => {
+          e.dataTransfer.setData('text/plain', job.id);
+        });
+
+        div.addEventListener('dragover', e => e.preventDefault());
+
+        div.addEventListener('drop', e => {
+          e.preventDefault();
+          const draggedId = e.dataTransfer.getData('text/plain');
+          reorderJob(draggedId, job.id, cat);
+        });
+
+        list.appendChild(div);
+      });
+
+      section.appendChild(header);
+      section.appendChild(list);
+      container.appendChild(section);
+    });
+
+    forceChartUpdate();
+  }
+
+  function reorderJob(dragId, targetId, category) {
+    const jobs = data.jobs.filter(j => j.category === category);
+    const dragIndex = jobs.findIndex(j => j.id === dragId);
+    const targetIndex = jobs.findIndex(j => j.id === targetId);
+    if (dragIndex === -1 || targetIndex === -1) return;
+
+    const [moved] = jobs.splice(dragIndex, 1);
+    jobs.splice(targetIndex, 0, moved);
+
+    data.jobs = [
+      ...data.jobs.filter(j => j.category !== category),
+      ...jobs
+    ];
+
+    renderJobs();
+  }
+
+  function renderEmployees() {
+    employeesListEl.innerHTML = '';
+    const weekKey = getCurrentWeekKey();
+
+    const districts = ["Electrical", "Instrumentation", "Flex"];
+
+    districts.forEach(district => {
+      const employeesInDistrict = data.employees.filter(e => e.district === district);
+      if (employeesInDistrict.length === 0) return;
+
+      const header = document.createElement('div');
+      header.className = 'district-header';
+      header.textContent = district;
+      employeesListEl.appendChild(header);
+
+      employeesInDistrict.forEach(emp => {
+        const card = document.createElement('div');
+        card.className = 'employee-card';
+        if (emp.collapsed) card.classList.add('collapsed');
+
+        const headerRow = document.createElement('div');
+        headerRow.className = 'employee-header';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'employee-name';
+        nameSpan.textContent = emp.name;
+
+        const districtSpan = document.createElement('span');
+        districtSpan.className = 'employee-district';
+        const districtSelect = document.createElement('select');
+        ["Electrical", "Instrumentation", "Flex"].forEach(d => {
+          const opt = document.createElement('option');
+          opt.value = d;
+          opt.textContent = d;
+          if (emp.district === d) opt.selected = true;
+          districtSelect.appendChild(opt);
+        });
+        districtSelect.onchange = () => {
+          emp.district = districtSelect.value;
+          renderEmployees();
+        };
+        districtSpan.appendChild(districtSelect);
+
+        const total = totalHoursForEmployeeWeek(weekKey, emp.id);
+        const budgetSpan = document.createElement('span');
+        budgetSpan.className = 'employee-budget';
+        budgetSpan.textContent = `Allocated: ${total}/${emp.weeklyBudget} hrs`;
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.textContent = 'Toggle';
+        toggleBtn.onclick = () => {
+          emp.collapsed = !emp.collapsed;
+          card.classList.toggle('collapsed');
+        };
+
+        const removeBtn = document.createElement('button');
+        removeBtn.textContent = 'Remove';
+        removeBtn.onclick = () => removeEmployee(emp.id);
+
+        headerRow.appendChild(nameSpan);
+        headerRow.appendChild(districtSpan);
+        headerRow.appendChild(budgetSpan);
+        headerRow.appendChild(toggleBtn);
+        headerRow.appendChild(removeBtn);
+
+        const gaugeLabel = document.createElement('div');
+        gaugeLabel.className = 'gauge-label';
+        const pct = emp.weeklyBudget > 0 ? Math.round((total / emp.weeklyBudget) * 100) : 0;
+        gaugeLabel.textContent = `Usage: ${pct}%`;
+
+        const gauge = document.createElement('div');
+        gauge.className = 'gauge';
+        if (pct > 100) gauge.classList.add('over-budget');
+
+        const empAssignments = getEmployeeAssignmentsForWeek(weekKey, emp.id);
+
+        const totalHours = total || 1;
+        let offset = 0;
+
+        Object.entries(empAssignments).forEach(([jobId, a]) => {
+          const parentHours = a.hours || 0;
+          if (parentHours <= 0) return;
+
+          const job = data.jobs.find(j => j.id === jobId);
+          const baseColor = job && job.color ? job.color : '#3b82f6';
+
+          const parentPctOfTotal = (parentHours / totalHours) * 100;
+
+          const subtasks = a.subtasks || [];
+          const totalSubHours = subtasks.reduce((s, sub) => s + (sub.hours || 0), 0);
+
+          if (subtasks.length === 0 || totalSubHours <= 0) {
+            const fill = document.createElement('div');
+            fill.className = 'gauge-fill';
+            fill.style.left = offset + '%';
+            fill.style.width = parentPctOfTotal + '%';
+            fill.style.background = baseColor;
+            gauge.appendChild(fill);
+            offset += parentPctOfTotal;
+            return;
+          }
+
+          const scale = totalSubHours > parentHours ? (parentHours / totalSubHours) : 1;
+          let usedParentHours = 0;
+
+          subtasks.forEach(sub => {
+            const rawSubHours = sub.hours || 0;
+            if (rawSubHours <= 0) return;
+            const effectiveSubHours = rawSubHours * scale;
+            usedParentHours += effectiveSubHours;
+
+            const subPctOfTotal = (effectiveSubHours / totalHours) * 100;
+
+            const fill = document.createElement('div');
+            fill.className = 'gauge-fill';
+            fill.style.left = offset + '%';
+            fill.style.width = subPctOfTotal + '%';
+            fill.style.background = sub.color || baseColor;
+            gauge.appendChild(fill);
+            offset += subPctOfTotal;
+          });
+
+          const remainingParentHours = Math.max(0, parentHours - usedParentHours);
+          if (remainingParentHours > 0) {
+            const remainingPctOfTotal = (remainingParentHours / totalHours) * 100;
+            const fill = document.createElement('div');
+            fill.className = 'gauge-fill';
+            fill.style.left = offset + '%';
+            fill.style.width = remainingPctOfTotal + '%';
+            fill.style.background = baseColor;
+            gauge.appendChild(fill);
+            offset += remainingPctOfTotal;
+          }
+        });
+
+        const dropzone = document.createElement('div');
+        dropzone.className = 'employee-dropzone';
+        dropzone.dataset.employeeId = emp.id;
+
+        dropzone.addEventListener('dragover', e => {
+          e.preventDefault();
+          dropzone.classList.add('over');
+        });
+        dropzone.addEventListener('dragleave', () => dropzone.classList.remove('over'));
+        dropzone.addEventListener('drop', e => {
+          e.preventDefault();
+          dropzone.classList.remove('over');
+          const jobId = e.dataTransfer.getData('text/plain');
+          if (jobId) addAssignment(weekKey, emp.id, jobId);
+        });
+
+        Object.keys(empAssignments).forEach(jobId => {
+          const job = data.jobs.find(j => j.id === jobId);
+          if (!job) return;
+          const assignment = empAssignments[jobId];
+
+          const row = document.createElement('div');
+          row.className = 'assignment';
+
+          const top = document.createElement('div');
+          top.className = 'assignment-top';
+
+          const label = document.createElement('span');
+          label.textContent = job.name;
+
+          const hoursInput = document.createElement('input');
+          hoursInput.type = 'number';
+          hoursInput.min = '0';
+          hoursInput.step = '0.25';
+          hoursInput.value = assignment.hours || 0;
+          hoursInput.onchange = () => {
+            updateAssignmentHours(weekKey, emp.id, jobId, parseFloat(hoursInput.value) || 0);
+          };
+
+          const removeAssignBtn = document.createElement('button');
+          removeAssignBtn.textContent = 'X';
+          removeAssignBtn.onclick = () => removeAssignment(weekKey, emp.id, jobId);
+
+          top.appendChild(label);
+          top.appendChild(hoursInput);
+          top.appendChild(removeAssignBtn);
+
+          const subList = document.createElement('div');
+          subList.className = 'subtask-list';
+
+          assignment.subtasks = assignment.subtasks || [];
+          assignment.subtasks.forEach((sub, index) => {
+            const subRow = document.createElement('div');
+            subRow.className = 'subtask-row';
+
+            const subName = document.createElement('span');
+            subName.textContent = `${index + 1}. ${sub.name}`;
+
+            const subHours = document.createElement('input');
+            subHours.type = 'number';
+            subHours.min = '0';
+            subHours.step = '0.25';
+            subHours.value = sub.hours || 0;
+            subHours.onchange = () => {
+              sub.hours = parseFloat(subHours.value) || 0;
+              renderEmployees();
+            };
+
+            const colorInput = document.createElement('input');
+            colorInput.type = 'color';
+            colorInput.value = sub.color || (job.color || '#3b82f6');
+            colorInput.onchange = () => {
+              sub.color = colorInput.value;
+              renderEmployees();
+            };
+
+            const del = document.createElement('button');
+            del.textContent = 'X';
+            del.onclick = () => {
+              assignment.subtasks.splice(index, 1);
+              renderEmployees();
+            };
+
+            subRow.appendChild(subName);
+            subRow.appendChild(subHours);
+            subRow.appendChild(colorInput);
+            subRow.appendChild(del);
+            subList.appendChild(subRow);
+          });
+
+          const subInputRow = document.createElement('div');
+          subInputRow.style.display = 'flex';
+          subInputRow.style.gap = '4px';
+          subInputRow.style.alignItems = 'center';
+
+          const subInputLabel = document.createElement('span');
+          subInputLabel.style.fontSize = '11px';
+          subInputLabel.textContent = 'Subtask name:';
+
+          const subInput = document.createElement('input');
+          subInput.placeholder = "Add subtask";
+          subInput.style.flex = '1';
+          subInput.onkeydown = e => {
+            if (e.key === 'Enter' && subInput.value.trim()) {
+              assignment.subtasks.push({
+                name: subInput.value.trim(),
+                hours: 0,
+                color: job.color || '#3b82f6'
+              });
+              subInput.value = '';
+              renderEmployees();
+            }
+          };
+
+          subInputRow.appendChild(subInputLabel);
+          subInputRow.appendChild(subInput);
+
+          row.appendChild(top);
+          row.appendChild(subList);
+          row.appendChild(subInputRow);
+
+          dropzone.appendChild(row);
+        });
+
+        card.appendChild(headerRow);
+        card.appendChild(gaugeLabel);
+        card.appendChild(gauge);
+        card.appendChild(dropzone);
+
+        employeesListEl.appendChild(card);
+      });
+    });
+
+    forceChartUpdate();
+  }
+
+  function renderProjectChart() {
+    const weekKey = getCurrentWeekKey();
+    const canvas = document.getElementById('projectChart');
+    const ctx = canvas.getContext('2d');
+
+    canvas.width = canvas.clientWidth;
+    canvas.height = canvas.clientHeight;
+
+    const week = getAssignmentsForWeek(weekKey);
+
+    const projectTotals = {};
+    const projectEmployees = {};
+
+    Object.entries(week).forEach(([empId, empAssignments]) => {
+      Object.entries(empAssignments).forEach(([jobId, a]) => {
+        const parentHours = a.hours || 0;
+        if (parentHours <= 0) return;
+        projectTotals[jobId] = (projectTotals[jobId] || 0) + parentHours;
+        if (!projectEmployees[jobId]) projectEmployees[jobId] = new Set();
+        projectEmployees[jobId].add(empId);
+      });
+    });
+
+    const usedHours = totalHoursAllEmployees(weekKey);
+    const capacity = totalEmployeeCapacity();
+    const unutilizedHours = Math.max(0, capacity - usedHours);
+    const utilizationPct = capacity > 0 ? Math.round((usedHours / capacity) * 100) : 0;
+
+    chartHeaderLineEl.textContent =
+      `Utilization: ${usedHours}/${capacity} - ${utilizationPct}%`;
+
+    if (unutilizedHours > 0) {
+      projectTotals['__unutilized__'] = unutilizedHours;
+    }
+
+    chartLegendEl.innerHTML = '';
+    Object.entries(projectTotals).forEach(([jobId, hours]) => {
+      const legendItem = document.createElement('div');
+      legendItem.className = 'legend-item';
+
+      const colorBox = document.createElement('div');
+      colorBox.className = 'legend-color';
+
+      let labelText = '';
+      if (jobId === '__unutilized__') {
+        colorBox.style.background = '#9ca3af';
+        labelText = `Unutilized: ${hours} hrs`;
+      } else {
+        const job = data.jobs.find(j => j.id === jobId);
+        if (!job) return;
+        colorBox.style.background = job.color || '#3b82f6';
+        const empCount = projectEmployees[jobId] ? projectEmployees[jobId].size : 0;
+        labelText = `${job.name}: ${hours} hrs (${empCount} employee${empCount === 1 ? '' : 's'})`;
+      }
+
+      const label = document.createElement('span');
+      label.textContent = labelText;
+
+      legendItem.appendChild(colorBox);
+      legendItem.appendChild(label);
+      chartLegendEl.appendChild(legendItem);
+    });
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const jobIds = Object.keys(projectTotals);
+    if (jobIds.length === 0) return;
+
+    const width = canvas.width;
+    const height = canvas.height;
+    const max = Math.max(...Object.values(projectTotals), 1);
+
+    const barWidth = Math.max(30, Math.min(60, (width - 80) / jobIds.length - 20));
+    const gap = 20;
+    const bottomMargin = 30;
+    const topMargin = 30;
+    const chartHeight = height - bottomMargin - topMargin;
+
+    ctx.font = "11px Arial";
+    ctx.textBaseline = "middle";
+
+    jobIds.forEach((jobId, index) => {
+      const hours = projectTotals[jobId];
+      const x = 40 + index * (barWidth + gap);
+      const barHeight = (hours / max) * chartHeight;
+      const y = height - bottomMargin - barHeight;
+
+      let color = '#3b82f6';
+      let name = '';
+
+      if (jobId === '__unutilized__') {
+        color = '#9ca3af';
+        name = 'Unutilized';
+      } else {
+        const job = data.jobs.find(j => j.id === jobId);
+        if (!job) return;
+        color = job.color || '#3b82f6';
+        name = job.name;
+      }
+
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, barWidth, barHeight);
+
+      const percentOfWorkload = capacity > 0 ? Math.round((hours / capacity) * 100) : 0;
+      ctx.fillStyle = "#000";
+      ctx.textAlign = "center";
+      ctx.fillText(`${hours}h (${percentOfWorkload}%)`, x + barWidth / 2, y - 10);
+
+      ctx.save();
+      ctx.translate(x + barWidth / 2, height - bottomMargin + 12);
+      ctx.rotate(-Math.PI / 4);
+      ctx.fillText(name, 0, 0);
+      ctx.restore();
+    });
+  }
+
+  function renderAll() {
+    renderWeekLabel();
+    renderJobs();
+    renderEmployees();
+  }
+
+  // ---------- Data operations ----------
+  function addJob(name) {
+    if (!name.trim()) return;
+    data.jobs.push({
+      id: uuid(),
+      name: name.trim(),
+      category: document.getElementById('jobCategoryInput').value,
+      color: document.getElementById('jobColorInput').value || '#3b82f6',
+      subtasks: []
+    });
+    renderJobs();
+  }
+
+  function removeJob(jobId) {
+    data.jobs = data.jobs.filter(j => j.id !== jobId);
+    Object.keys(data.assignments).forEach(weekKey => {
+      const week = data.assignments[weekKey];
+      Object.keys(week).forEach(empId => {
+        if (week[empId][jobId]) delete week[empId][jobId];
+      });
+    });
+    renderAll();
+  }
+
+  function addEmployee(name, weeklyBudget, district) {
+    if (!name.trim()) return;
+    const budget = parseFloat(weeklyBudget);
+    if (isNaN(budget) || budget <= 0) return;
+    data.employees.push({
+      id: uuid(),
+      name: name.trim(),
+      weeklyBudget: budget,
+      district: district || 'Electrical',
+      collapsed: false
+    });
+    renderEmployees();
+  }
+
+  function removeEmployee(empId) {
+    data.employees = data.employees.filter(e => e.id !== empId);
+    Object.keys(data.assignments).forEach(weekKey => {
+      const week = data.assignments[weekKey];
+      if (week[empId]) delete week[empId];
+    });
+    renderEmployees();
+  }
+
+  function deepCopySubtasksTemplate(job, district) {
+    job.subtasks = job.subtasks || [];
+    return job.subtasks
+      .filter(st => {
+        if (district === 'Flex') return true;
+        return st.category === district;
+      })
+      .map(st => ({
+        name: st.name,
+        hours: 0,
+        color: st.color || job.color || '#3b82f6',
+        category: st.category || 'Other'
+      }));
+  }
+
+  function addAssignment(weekKey, empId, jobId) {
+    const empAssignments = getEmployeeAssignmentsForWeek(weekKey, empId);
+    if (!empAssignments[jobId]) {
+      const job = data.jobs.find(j => j.id === jobId);
+      const emp = data.employees.find(e => e.id === empId);
+      const district = emp ? emp.district : 'Electrical';
+      empAssignments[jobId] = {
+        hours: 0,
+        subtasks: job ? deepCopySubtasksTemplate(job, district) : []
+      };
+    }
+    renderEmployees();
+  }
+
+  function updateAssignmentHours(weekKey, empId, jobId, hours) {
+    const empAssignments = getEmployeeAssignmentsForWeek(weekKey, empId);
+    if (!empAssignments[jobId]) {
+      const job = data.jobs.find(j => j.id === jobId);
+      const emp = data.employees.find(e => e.id === empId);
+      const district = emp ? emp.district : 'Electrical';
+      empAssignments[jobId] = {
+        hours: 0,
+        subtasks: job ? deepCopySubtasksTemplate(job, district) : []
+      };
+    }
+    empAssignments[jobId].hours = hours;
+    renderEmployees();
+  }
+
+  function removeAssignment(weekKey, empId, jobId) {
+    const empAssignments = getEmployeeAssignmentsForWeek(weekKey, empId);
+    if (empAssignments[jobId]) delete empAssignments[jobId];
+    renderEmployees();
+  }
+
+  // ---------- Week navigation ----------
+  document.getElementById('prevWeekBtn').addEventListener('click', () => {
+    data.currentWeekStart.setDate(data.currentWeekStart.getDate() - 7);
+    renderAll();
+  });
+
+  document.getElementById('nextWeekBtn').addEventListener('click', () => {
+    data.currentWeekStart.setDate(data.currentWeekStart.getDate() + 7);
+    renderAll();
+  });
+
+  // ---------- Add job / employee ----------
+  document.getElementById('addJobBtn').addEventListener('click', () => {
+    const nameInput = document.getElementById('jobNameInput');
+    addJob(nameInput.value);
+    nameInput.value = '';
+  });
+
+  document.getElementById('jobNameInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      addJob(e.target.value);
+      e.target.value = '';
+    }
+  });
+
+  document.getElementById('addEmployeeBtn').addEventListener('click', () => {
+    const nameInput = document.getElementById('employeeNameInput');
+    const budgetInput = document.getElementById('employeeBudgetInput');
+    const districtInput = document.getElementById('employeeDistrictInput');
+    addEmployee(nameInput.value, budgetInput.value, districtInput.value);
+    nameInput.value = '';
+    budgetInput.value = '';
+  });
+
+  document.getElementById('employeeNameInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      const nameInput = document.getElementById('employeeNameInput');
+      const budgetInput = document.getElementById('employeeBudgetInput');
+      const districtInput = document.getElementById('employeeDistrictInput');
+      addEmployee(nameInput.value, budgetInput.value, districtInput.value);
+      nameInput.value = '';
+      budgetInput.value = '';
+    }
+  });
+
+  // ---------- Export CSV ----------
+  document.getElementById('exportCsvBtn').addEventListener('click', () => {
+    const weekKey = getCurrentWeekKey();
+    const weekAssignments = getAssignmentsForWeek(weekKey);
+
+    const rows = [];
+    rows.push(['Week', 'Employee', 'District', 'Job', 'Hours', 'EmployeeBudget', 'TotalAllocatedForEmployee']);
+
+    data.employees.forEach(emp => {
+      const empAssignments = weekAssignments[emp.id] || {};
+      const total = totalHoursForEmployeeWeek(weekKey, emp.id);
+      const jobIds = Object.keys(empAssignments);
+
+      if (jobIds.length === 0) {
+        rows.push([weekKey, emp.name, emp.district || '', '', '', emp.weeklyBudget, total]);
+      } else {
+        jobIds.forEach(jobId => {
+          const job = data.jobs.find(j => j.id === jobId);
+          const jobName = job ? job.name : '(deleted job)';
+          const hours = empAssignments[jobId].hours || 0;
+          rows.push([weekKey, emp.name, emp.district || '', jobName, hours, emp.weeklyBudget, total]);
+        });
+      }
+    });
+
+    const csvContent = rows
+      .map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+      .join('\r\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `week_${weekKey}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+  // ---------- Export / Import JSON ----------
+  document.getElementById('exportJsonBtn').addEventListener('click', () => {
+    const exportData = {
+      employees: data.employees,
+      jobs: data.jobs,
+      assignments: data.assignments,
+      currentWeekStart: data.currentWeekStart.toISOString()
+    };
+
+    const jsonStr = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'planner_data.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+  document.getElementById('importJsonInput').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = evt => {
+      try {
+        const imported = JSON.parse(evt.target.result);
+        if (!imported.employees || !imported.jobs || !imported.assignments) {
+          alert('Invalid JSON format.');
+          return;
+        }
+        data.employees = imported.employees;
+        data.jobs = imported.jobs;
+        data.assignments = imported.assignments;
+        data.currentWeekStart = imported.currentWeekStart
+          ? new Date(imported.currentWeekStart)
+          : startOfWeek(new Date());
+        renderAll();
+      } catch (err) {
+        console.error(err);
+        alert('Failed to parse JSON.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  });
+
+  // ---------- Resizable columns ----------
+  function makeResizable(divider, leftCol, rightCol) {
+    let dragging = false;
+
+    divider.addEventListener('mousedown', () => dragging = true);
+    window.addEventListener('mouseup', () => dragging = false);
+
+    window.addEventListener('mousemove', e => {
+      if (!dragging) return;
+
+      const containerRect = document.querySelector('.container').getBoundingClientRect();
+      const totalWidth = containerRect.width;
+      const x = e.clientX - containerRect.left;
+
+      if (divider.id === 'divider1') {
+        const min = 150;
+        const max = totalWidth - 300;
+        const leftWidth = Math.max(min, Math.min(x, max));
+        const employeesWidth = document.querySelector('.employees-column').offsetWidth;
+        const divider2Width = document.getElementById('divider2').offsetWidth;
+        const rightWidth = totalWidth - leftWidth - divider.offsetWidth - employeesWidth - divider2Width;
+        if (rightWidth < 150) return;
+        leftCol.style.width = leftWidth + 'px';
+        rightCol.style.width = rightWidth + 'px';
+      } else if (divider.id === 'divider2') {
+        const chartWidth = document.querySelector('.chart-column').offsetWidth;
+        const divider1Width = document.getElementById('divider1').offsetWidth;
+        const min = 150;
+        const max = totalWidth - chartWidth - 300;
+        const leftWidth = Math.max(min, Math.min(x - chartWidth - divider1Width, max));
+        const rightWidth = totalWidth - chartWidth - divider1Width - divider.offsetWidth - leftWidth;
+        if (rightWidth < 150) return;
+        leftCol.style.width = leftWidth + 'px';
+        rightCol.style.width = rightWidth + 'px';
+      }
+
+      forceChartUpdate();
+    });
+  }
+
+  makeResizable(
+    document.getElementById('divider1'),
+    document.querySelector('.chart-column'),
+    document.querySelector('.jobs-column')
+  );
+
+  makeResizable(
+    document.getElementById('divider2'),
+    document.querySelector('.jobs-column'),
+    document.querySelector('.employees-column')
+  );
+
+  // ---------- Initial render ----------
+  renderAll();
+</script>
+</body>
+</html>

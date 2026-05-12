@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Management Planner</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+
+    <header>
+        <h1>Management Planner</h1>
+
+        <div class="week-controls">
+            <div class="week-nav-row">
+                <button id="prevWeekBtn">&lt; Prev</button>
+                <span id="weekLabel"></span>
+                <button id="nextWeekBtn">Next &gt;</button>
+            </div>
+
+            <button id="jumpToPresentBtn" class="week-jump-row">Jump to Present</button>
+        </div>
+
+        <div class="header-actions">
+            <button id="fileBtn" class="file-btn" title="File">File</button>
+
+            <div id="fileMenu" class="file-menu hidden">
+                <button id="exportCsvBtn">Export Week CSV</button>
+                <button id="exportAllCsvBtn">Export All Weeks CSV</button>
+                <button id="exportJsonBtn">Export JSON</button>
+                <button id="copyShareLinkBtn">Copy Share Link</button>
+                <button id="importBtn">Import JSON</button>
+                <input type="file" id="importJsonInput" accept=".json" hidden>
+            </div>
+
+            <button id="settingsBtn" class="settings-btn" title="Settings">⚙</button>
+
+            <div id="settingsMenu" class="settings-menu hidden">
+                <label class="settings-item settings-label">
+                    <span>Dark Mode</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="darkModeToggle" />
+                        <span class="toggle-slider"></span>
+                    </label>
+                </label>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+
+        <!-- CHARTS -->
+        <div class="chart-column">
+            <h2>Project Allocation</h2>
+            <div id="chartHeaderLine" class="chart-header-line"></div>
+            <canvas id="projectChart"></canvas>
+            <div id="chartLegend" class="chart-legend"></div>
+
+            <h3 class="burn-down-title">Hours Budget Burn-Down</h3>
+            <canvas id="burnDownChart"></canvas>
+        </div>
+
+        <div id="divider1" class="divider"></div>
+
+        <!-- JOBS -->
+        <div class="jobs-column">
+            <h2>Jobs</h2>
+
+            <div class="form-inline">
+                <input type="text" id="jobNameInput" placeholder="Job name" />
+                <select id="jobCategoryInput">
+                    <option>Active</option>
+                    <option>Upcoming</option>
+                    <option>Complete</option>
+                    <option>Other</option>
+                </select>
+                <select id="jobClassInput">
+                    <option>Class 1</option>
+                    <option>Class 2</option>
+                    <option>Class 3</option>
+                    <option>Class 4</option>
+                    <option>Class 5</option>
+                </select>
+                <input type="color" id="jobColorInput" value="#3b82f6" />
+                <button id="addJobBtn">Add Job</button>
+            </div>
+
+            <div id="jobsList"></div>
+        </div>
+
+        <div id="divider2" class="divider"></div>
+
+        <!-- EMPLOYEES -->
+        <div class="employees-column">
+            <h2>Employees</h2>
+
+            <div class="form-inline">
+                <input type="text" id="employeeNameInput" placeholder="Employee name" />
+                <input type="number" id="employeeBudgetInput" placeholder="Weekly hours" min="1" />
+                <select id="employeeDistrictInput">
+                    <option>Electrical</option>
+                    <option>Instrumentation</option>
+                    <option>Flex</option>
+                </select>
+                <button id="addEmployeeBtn">Add Employee</button>
+            </div>
+
+            <div id="employeesList" class="list"></div>
+        </div>
+
+    </div>
+
+    <div id="plannerToast"></div>
+    <div id="autoSaveIndicator">✓ Saved</div>
+
+    <script type="module" src="./js/data.js"></script>
+    <script type="module" src="./js/charts.js"></script>
+    <script type="module" src="./js/ui.js"></script>
+    <script type="module" src="./js/main.js"></script>
+
+
+</body>
+
+</html>
