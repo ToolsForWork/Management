@@ -135,7 +135,7 @@
                 <select id="employeeDistrictInput" aria-label="Employee district">
                     <option>Electrical</option>
                     <option>Instrumentation</option>
-                    <option>Flex</option>
+                    <option>E&amp;I</option>
                 </select>
                 <button type="button" id="addEmployeeBtn">Add employee</button>
             </div>
@@ -164,8 +164,16 @@
             <button type="button" data-workspace-tab="projects">Projects</button>
             <button type="button" data-workspace-tab="tasks">Tasks</button>
             <button type="button" data-workspace-tab="people">People</button>
+            <button type="button" data-workspace-tab="roster">Roster</button>
             <button type="button" data-workspace-tab="activity">Activity</button>
         </nav>
+        <div class="workspace-identity-bar">
+            <label>
+                <span>Working as</span>
+                <select id="workspaceIdentitySelect" aria-label="Current roster identity"></select>
+            </label>
+            <span id="workspaceIdentityHelp"></span>
+        </div>
         <main id="workspaceContent" class="workspace-content"></main>
     </div>
 
