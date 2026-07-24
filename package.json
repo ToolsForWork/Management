@@ -1,0 +1,10 @@
+{
+  "name": "team-capacity-planner",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test --test-isolation=none",
+    "check": "node --check js/data.js && node --check js/auth.js && node --check js/charts.js && node --check js/ui.js && node --check js/workspace.js && node --check js/main.js && node --test --test-isolation=none"
+  }
+}

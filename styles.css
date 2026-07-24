@@ -931,7 +931,7 @@ header {
   inset: 0;
   z-index: 1000;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: 50px auto auto minmax(0, 1fr);
   overflow: hidden;
   background: var(--page);
   color: var(--text);
@@ -945,20 +945,21 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 76px;
-  padding: 14px clamp(18px, 4vw, 56px);
+  min-height: 50px;
+  padding: 5px clamp(18px, 4vw, 56px);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
 
 .workspace-header h2 {
-  margin: 2px 0 0;
-  font-size: 23px;
+  margin: 0;
+  font-size: 18px;
   letter-spacing: -0.025em;
 }
 
 .workspace-close {
-  width: 40px;
+  width: 36px;
+  min-height: 36px;
   padding: 2px;
   border-color: var(--border);
   background: transparent;
@@ -1027,6 +1028,18 @@ header {
 .workspace-identity-bar > span {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.identity-link {
+  margin-left: auto;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.identity-link.hidden {
+  display: none;
 }
 
 .workspace-content {
@@ -1563,6 +1576,86 @@ header {
   border-left: 2px solid var(--border-strong);
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.task-note-preview summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.task-note-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+.task-note-row > span {
+  flex: 1;
+}
+
+.task-note-row .icon-button {
+  flex: 0 0 auto;
+}
+
+.hours-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.hours-summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.hours-summary-card span,
+.plan-caption {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.hours-summary-card.under-planned {
+  border-color: #f59e0b;
+}
+
+.plan-panel {
+  min-height: auto;
+}
+
+.project-checklist {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.project-checklist summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.checklist-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 12px;
+}
+
+.checklist-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.checklist-item input {
+  margin-top: 2px;
 }
 
 .task-row[draggable="true"] {

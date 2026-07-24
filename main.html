@@ -130,7 +130,7 @@
 
             <div class="creation-panel" aria-label="Add employee">
                 <input type="text" id="employeeNameInput" placeholder="Employee name" aria-label="Employee name" />
-                <input type="number" id="employeeBudgetInput" placeholder="Weekly capacity" min="0.25" step="0.25"
+                <input type="number" id="employeeBudgetInput" value="40" placeholder="Weekly capacity" min="0.25" step="0.25"
                     aria-label="Weekly capacity" />
                 <select id="employeeDistrictInput" aria-label="Employee district">
                     <option>Electrical</option>
@@ -173,6 +173,7 @@
                 <select id="workspaceIdentitySelect" aria-label="Current roster identity"></select>
             </label>
             <span id="workspaceIdentityHelp"></span>
+            <a id="microsoftIdentityLink" class="identity-link hidden" href="/.auth/login/aad?post_login_redirect_uri=/main.html">Sign in with Microsoft</a>
         </div>
         <main id="workspaceContent" class="workspace-content"></main>
     </div>
