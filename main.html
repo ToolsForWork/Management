@@ -3,38 +3,50 @@
 
 <head>
     <meta charset="UTF-8" />
-    <title>Management Planner</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Plan team capacity and project assignments by week." />
+    <title>Team Capacity Planner</title>
     <link rel="stylesheet" href="styles.css" />
 </head>
 
 <body>
 
     <header>
-        <h1>Management Planner</h1>
+        <div class="brand">
+            <span class="brand-mark" aria-hidden="true">M</span>
+            <div>
+                <h1>Team Planner</h1>
+                <span>Capacity and project planning</span>
+            </div>
+        </div>
 
         <div class="week-controls">
             <div class="week-nav-row">
-                <button id="prevWeekBtn">&lt; Prev</button>
-                <span id="weekLabel"></span>
-                <button id="nextWeekBtn">Next &gt;</button>
+                <button type="button" id="prevWeekBtn" aria-label="Previous week">←</button>
+                <span id="weekLabel" aria-live="polite"></span>
+                <button type="button" id="nextWeekBtn" aria-label="Next week">→</button>
             </div>
 
-            <button id="jumpToPresentBtn" class="week-jump-row">Jump to Present</button>
+            <div class="week-secondary-actions">
+                <button type="button" id="jumpToPresentBtn">This week</button>
+                <button type="button" id="copyPreviousWeekBtn">Copy previous</button>
+            </div>
         </div>
 
         <div class="header-actions">
-            <button id="fileBtn" class="file-btn" title="File">File</button>
+            <button type="button" id="fileBtn" class="file-btn" aria-haspopup="menu" aria-expanded="false">Data</button>
 
-            <div id="fileMenu" class="file-menu hidden">
-                <button id="exportCsvBtn">Export Week CSV</button>
-                <button id="exportAllCsvBtn">Export All Weeks CSV</button>
-                <button id="exportJsonBtn">Export JSON</button>
-                <button id="copyShareLinkBtn">Copy Share Link</button>
-                <button id="importBtn">Import JSON</button>
+            <div id="fileMenu" class="file-menu hidden" role="menu">
+                <button type="button" id="exportCsvBtn" role="menuitem">Export this week (.csv)</button>
+                <button type="button" id="exportAllCsvBtn" role="menuitem">Export all weeks (.csv)</button>
+                <button type="button" id="exportJsonBtn" role="menuitem">Export backup (.json)</button>
+                <button type="button" id="copyShareLinkBtn" role="menuitem">Copy snapshot link</button>
+                <button type="button" id="importBtn" role="menuitem">Import backup</button>
                 <input type="file" id="importJsonInput" accept=".json" hidden>
             </div>
 
-            <button id="settingsBtn" class="settings-btn" title="Settings">⚙</button>
+            <button type="button" id="settingsBtn" class="settings-btn" title="Settings"
+                aria-label="Settings" aria-haspopup="menu" aria-expanded="false">⚙</button>
 
             <div id="settingsMenu" class="settings-menu hidden">
                 <label class="settings-item settings-label">
@@ -50,73 +62,93 @@
 
     <div class="container">
 
-        <!-- CHARTS -->
-        <div class="chart-column">
-            <h2>Project Allocation</h2>
+        <section class="chart-column" aria-labelledby="overviewHeading">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">Weekly overview</p>
+                    <h2 id="overviewHeading">Project allocation</h2>
+                </div>
+            </div>
             <div id="chartHeaderLine" class="chart-header-line"></div>
-            <canvas id="projectChart"></canvas>
+            <canvas id="projectChart" role="img" aria-label="Project allocation chart"></canvas>
             <div id="chartLegend" class="chart-legend"></div>
 
-            <h3 class="burn-down-title">Hours Budget Burn-Down</h3>
-            <canvas id="burnDownChart"></canvas>
-        </div>
+            <h3 class="burn-down-title">Project budget remaining</h3>
+            <canvas id="burnDownChart" role="img" aria-label="Project hours budget remaining over time"></canvas>
+        </section>
 
-        <div id="divider1" class="divider"></div>
+        <div id="divider1" class="divider" aria-hidden="true"></div>
 
-        <!-- JOBS -->
-        <div class="jobs-column">
-            <h2>Jobs</h2>
+        <section class="jobs-column" aria-labelledby="projectsHeading">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">Portfolio</p>
+                    <h2 id="projectsHeading">Projects</h2>
+                </div>
+            </div>
 
-            <div class="form-inline">
-                <input type="text" id="jobNameInput" placeholder="Job name" />
-                <select id="jobCategoryInput">
+            <div class="creation-panel" aria-label="Add project">
+                <input type="text" id="jobNameInput" placeholder="Project name" aria-label="Project name" />
+                <select id="jobCategoryInput" aria-label="Project status">
                     <option>Active</option>
                     <option>Upcoming</option>
                     <option>Complete</option>
                     <option>Other</option>
                 </select>
-                <select id="jobClassInput">
+                <select id="jobClassInput" aria-label="Project class">
                     <option>Class 1</option>
                     <option>Class 2</option>
                     <option>Class 3</option>
                     <option>Class 4</option>
                     <option>Class 5</option>
                 </select>
-                <input type="color" id="jobColorInput" value="#3b82f6" />
-                <button id="addJobBtn">Add Job</button>
+                <input type="color" id="jobColorInput" value="#3b82f6" aria-label="Project color" />
+                <button type="button" id="addJobBtn">Add project</button>
             </div>
 
+            <label class="search-field">
+                <span aria-hidden="true">⌕</span>
+                <input type="search" id="jobSearchInput" placeholder="Search projects or subtasks"
+                    aria-label="Search projects or subtasks" />
+            </label>
             <div id="jobsList"></div>
-        </div>
+        </section>
 
-        <div id="divider2" class="divider"></div>
+        <div id="divider2" class="divider" aria-hidden="true"></div>
 
-        <!-- EMPLOYEES -->
-        <div class="employees-column">
-            <h2>Employees</h2>
+        <section class="employees-column" aria-labelledby="teamHeading">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">Workforce</p>
+                    <h2 id="teamHeading">Team</h2>
+                </div>
+            </div>
 
-            <div class="form-inline">
-                <input type="text" id="employeeNameInput" placeholder="Employee name" />
-                <input type="number" id="employeeBudgetInput" placeholder="Weekly hours" min="1" />
-                <select id="employeeDistrictInput">
+            <div class="creation-panel" aria-label="Add employee">
+                <input type="text" id="employeeNameInput" placeholder="Employee name" aria-label="Employee name" />
+                <input type="number" id="employeeBudgetInput" placeholder="Weekly capacity" min="0.25" step="0.25"
+                    aria-label="Weekly capacity" />
+                <select id="employeeDistrictInput" aria-label="Employee district">
                     <option>Electrical</option>
                     <option>Instrumentation</option>
                     <option>Flex</option>
                 </select>
-                <button id="addEmployeeBtn">Add Employee</button>
+                <button type="button" id="addEmployeeBtn">Add employee</button>
             </div>
 
+            <label class="search-field">
+                <span aria-hidden="true">⌕</span>
+                <input type="search" id="employeeSearchInput" placeholder="Search employees or districts"
+                    aria-label="Search employees or districts" />
+            </label>
             <div id="employeesList" class="list"></div>
-        </div>
+        </section>
 
     </div>
 
-    <div id="plannerToast"></div>
-    <div id="autoSaveIndicator">✓ Saved</div>
+    <div id="plannerToast" role="status" aria-live="polite"></div>
+    <div id="autoSaveIndicator" role="status">✓ Saved locally</div>
 
-    <script type="module" src="./js/data.js"></script>
-    <script type="module" src="./js/charts.js"></script>
-    <script type="module" src="./js/ui.js"></script>
     <script type="module" src="./js/main.js"></script>
 
 
