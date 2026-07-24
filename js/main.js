@@ -12,8 +12,10 @@ import {
   getCurrentWeekKey,
   getAssignmentsForWeek,
   totalHoursForEmployeeWeek,
+  getEffectiveEmployeeCapacity,
   copyWeekAssignments,
-  hasAssignmentsForWeek
+  hasAssignmentsForWeek,
+  recordActivity
 } from './data.js';
 import { renderWeekLabel, forceChartUpdate } from './charts.js';
 import {
@@ -25,6 +27,7 @@ import {
   showToast,
   makeResizable
 } from './ui.js';
+import { initializeWorkspace, refreshWorkspaceSummary } from './workspace.js';
 
 const THEME_KEY = 'planner-theme';
 
@@ -33,6 +36,7 @@ export function renderAll() {
   renderJobs();
   renderEmployees();
   forceChartUpdate();
+  refreshWorkspaceSummary();
 }
 
 initialize();
@@ -45,6 +49,7 @@ function initialize() {
   wireCreationForms();
   wireFileActions();
   wireSearch();
+  initializeWorkspace();
   renderAll();
 
   const colorInput = document.getElementById('jobColorInput');
@@ -130,6 +135,7 @@ function copyPreviousWeek() {
   }
 
   copyWeekAssignments(sourceWeekKey, targetWeekKey);
+  recordActivity('Planning', `Assignments copied from ${sourceWeekKey} to ${targetWeekKey}.`, 'week', targetWeekKey);
   renderAll();
   scheduleSave();
   showToast('Previous week copied.');
@@ -199,7 +205,16 @@ function exportCurrentWeekCsv() {
     const jobIds = Object.keys(employeeAssignments);
 
     if (jobIds.length === 0) {
-      rows.push([weekKey, employee.name, employee.district, '', '', employee.weeklyBudget, total]);
+      rows.push([
+        weekKey,
+        employee.name,
+        employee.district,
+        '',
+        '',
+        employee.weeklyBudget,
+        getEffectiveEmployeeCapacity(employee, weekKey),
+        total
+      ]);
       return;
     }
     jobIds.forEach(jobId => {
@@ -211,6 +226,7 @@ function exportCurrentWeekCsv() {
         job?.name || '(deleted project)',
         employeeAssignments[jobId].hours || 0,
         employee.weeklyBudget,
+        getEffectiveEmployeeCapacity(employee, weekKey),
         total
       ]);
     });
@@ -239,6 +255,7 @@ function exportAllWeeksCsv() {
           job?.name || '(deleted project)',
           assignment.hours,
           employee.weeklyBudget,
+          getEffectiveEmployeeCapacity(employee, weekKey),
           total
         ]);
       });
@@ -254,7 +271,7 @@ function exportAllWeeksCsv() {
 }
 
 function csvHeaders() {
-  return ['Week', 'Employee', 'District', 'Project', 'Hours', 'EmployeeCapacity', 'TotalAllocated'];
+  return ['Week', 'Employee', 'District', 'Project', 'Hours', 'BaseCapacity', 'EffectiveCapacity', 'TotalAllocated'];
 }
 
 function exportJson() {

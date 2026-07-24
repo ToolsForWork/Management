@@ -4,6 +4,10 @@ export const DISTRICTS = ['Electrical', 'Instrumentation', 'Flex'];
 export const JOB_STATUSES = ['Active', 'Upcoming', 'Complete', 'Other'];
 export const JOB_CLASSES = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5'];
 export const SUBTASK_CATEGORIES = ['Electrical', 'Instrumentation', 'Other'];
+export const PRIORITIES = ['Low', 'Medium', 'High', 'Critical'];
+export const TASK_STATUSES = ['To do', 'In progress', 'Blocked', 'Done'];
+export const PROJECT_HEALTH = ['On track', 'At risk', 'Off track', 'Complete'];
+export const ASSIGNMENT_STATUSES = ['Proposed', 'Accepted', 'Needs change', 'Complete'];
 
 export const COLOR_PALETTE = [
   '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
@@ -14,7 +18,7 @@ export const COLOR_PALETTE = [
 
 const STORAGE_KEY = 'planner-data-v2';
 const LEGACY_STORAGE_KEY = 'planner-data-v1';
-const SNAPSHOT_VERSION = 2;
+const SNAPSHOT_VERSION = 3;
 const WEEK_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -55,6 +59,12 @@ export const data = {
   employees: [],
   jobs: [],
   assignments: {},
+  tasks: [],
+  timeOff: [],
+  checkIns: [],
+  goals: [],
+  oneOnOnes: [],
+  activity: [],
   currentWeekStart: startOfWeek(new Date())
 };
 
@@ -91,11 +101,134 @@ export function totalHoursAllEmployees(weekKey) {
   );
 }
 
-export function totalEmployeeCapacity() {
-  return data.employees.reduce(
-    (sum, employee) => sum + toNonNegativeNumber(employee.weeklyBudget),
+export function totalEmployeeCapacity(weekKey = getCurrentWeekKey()) {
+  return data.employees
+    .filter(employee => employee.active !== false)
+    .reduce(
+    (sum, employee) => sum + getEffectiveEmployeeCapacity(employee, weekKey),
     0
   );
+}
+
+export function getEffectiveEmployeeCapacity(employee, weekKey = getCurrentWeekKey()) {
+  const weekStart = startOfWeek(new Date(`${weekKey}T12:00:00`));
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+  const startKey = formatDate(weekStart);
+  const endKey = formatDate(weekEnd);
+  const leaveHours = data.timeOff
+    .filter(entry => entry.employeeId === employee.id
+      && entry.status === 'Approved'
+      && entry.startDate <= endKey
+      && entry.endDate >= startKey)
+    .reduce((sum, entry) => sum + toNonNegativeNumber(entry.hoursPerWeek), 0);
+  return Math.max(0, toNonNegativeNumber(employee.weeklyBudget) - leaveHours);
+}
+
+export function getAlerts(referenceDate = new Date()) {
+  const today = formatDate(referenceDate);
+  const soon = new Date(referenceDate);
+  soon.setDate(soon.getDate() + 14);
+  const soonKey = formatDate(soon);
+  const weekKey = getCurrentWeekKey();
+  const alerts = [];
+
+  data.employees.filter(employee => employee.active !== false).forEach(employee => {
+    const allocated = totalHoursForEmployeeWeek(weekKey, employee.id);
+    const capacity = getEffectiveEmployeeCapacity(employee, weekKey);
+    if (allocated > capacity) {
+      alerts.push({
+        severity: 'Critical',
+        type: 'Capacity',
+        message: `${employee.name} is allocated ${allocated - capacity} hours over capacity.`,
+        entityType: 'employee',
+        entityId: employee.id
+      });
+    }
+  });
+
+  data.jobs.forEach(job => {
+    if (!job.dueDate || job.health === 'Complete' || job.category === 'Complete') return;
+    if (job.dueDate < today) {
+      alerts.push({
+        severity: 'Critical',
+        type: 'Deadline',
+        message: `${job.name} passed its due date.`,
+        entityType: 'project',
+        entityId: job.id
+      });
+    } else if (job.dueDate <= soonKey) {
+      alerts.push({
+        severity: job.health === 'At risk' || job.health === 'Off track' ? 'High' : 'Medium',
+        type: 'Deadline',
+        message: `${job.name} is due ${job.dueDate}.`,
+        entityType: 'project',
+        entityId: job.id
+      });
+    }
+    if (job.health === 'At risk' || job.health === 'Off track') {
+      alerts.push({
+        severity: job.health === 'Off track' ? 'Critical' : 'High',
+        type: 'Project health',
+        message: `${job.name} is ${job.health.toLowerCase()}.`,
+        entityType: 'project',
+        entityId: job.id
+      });
+    }
+  });
+
+  data.tasks.forEach(task => {
+    if (task.status === 'Done' || !task.dueDate) return;
+    if (task.dueDate < today) {
+      alerts.push({
+        severity: task.priority === 'Critical' ? 'Critical' : 'High',
+        type: 'Overdue task',
+        message: `${task.title} was due ${task.dueDate}.`,
+        entityType: 'task',
+        entityId: task.id
+      });
+    } else if (task.dueDate <= soonKey && (task.priority === 'High' || task.priority === 'Critical')) {
+      alerts.push({
+        severity: 'Medium',
+        type: 'Upcoming task',
+        message: `${task.title} is due ${task.dueDate}.`,
+        entityType: 'task',
+        entityId: task.id
+      });
+    }
+  });
+
+  Object.entries(getAssignmentsForWeek(weekKey)).forEach(([employeeId, assignments]) => {
+    Object.entries(assignments).forEach(([jobId, assignment]) => {
+      if (assignment.status !== 'Needs change') return;
+      const employee = data.employees.find(candidate => candidate.id === employeeId);
+      const job = data.jobs.find(candidate => candidate.id === jobId);
+      if (employee && job) {
+        alerts.push({
+          severity: 'High',
+          type: 'Assignment',
+          message: `${employee.name} requested a change to ${job.name}.`,
+          entityType: 'employee',
+          entityId: employeeId
+        });
+      }
+    });
+  });
+
+  const severityOrder = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+  return alerts.sort((left, right) => severityOrder[left.severity] - severityOrder[right.severity]);
+}
+
+export function recordActivity(type, message, entityType = '', entityId = '') {
+  data.activity.unshift({
+    id: uuid(),
+    timestamp: new Date().toISOString(),
+    type: String(type || 'Update'),
+    message: String(message || '').trim(),
+    entityType,
+    entityId
+  });
+  data.activity = data.activity.slice(0, 500);
 }
 
 export function pickUnusedColor() {
@@ -139,6 +272,8 @@ export function ensureAssignment(weekKey, employeeId, jobId) {
     const employee = data.employees.find(candidate => candidate.id === employeeId);
     employeeAssignments[jobId] = {
       hours: 0,
+      status: 'Proposed',
+      note: '',
       subtasks: job
         ? deepCopySubtasksTemplate(job, employee?.district || DEFAULT_DISTRICT)
         : []
@@ -151,6 +286,12 @@ export function copyWeekAssignments(sourceWeekKey, targetWeekKey) {
   const source = getAssignmentsForWeek(sourceWeekKey);
   if (Object.keys(source).length === 0) return false;
   data.assignments[targetWeekKey] = structuredCloneSafe(source);
+  Object.values(data.assignments[targetWeekKey]).forEach(employeeAssignments => {
+    Object.values(employeeAssignments).forEach(assignment => {
+      assignment.status = 'Proposed';
+      assignment.note = '';
+    });
+  });
   return true;
 }
 
@@ -165,6 +306,12 @@ export function createSnapshot() {
     employees: structuredCloneSafe(data.employees),
     jobs: structuredCloneSafe(data.jobs),
     assignments: structuredCloneSafe(data.assignments),
+    tasks: structuredCloneSafe(data.tasks),
+    timeOff: structuredCloneSafe(data.timeOff),
+    checkIns: structuredCloneSafe(data.checkIns),
+    goals: structuredCloneSafe(data.goals),
+    oneOnOnes: structuredCloneSafe(data.oneOnOnes),
+    activity: structuredCloneSafe(data.activity),
     currentWeekStart: data.currentWeekStart.toISOString()
   };
 }
@@ -174,6 +321,12 @@ export function replaceData(snapshot) {
   data.employees = normalized.employees;
   data.jobs = normalized.jobs;
   data.assignments = normalized.assignments;
+  data.tasks = normalized.tasks;
+  data.timeOff = normalized.timeOff;
+  data.checkIns = normalized.checkIns;
+  data.goals = normalized.goals;
+  data.oneOnOnes = normalized.oneOnOnes;
+  data.activity = normalized.activity;
   data.currentWeekStart = normalized.currentWeekStart;
 }
 
@@ -246,11 +399,11 @@ function normalizeSnapshot(snapshot) {
   }
 
   const employees = snapshot.employees.map(normalizeEmployee);
-  const jobs = snapshot.jobs.map(normalizeJob);
   assertUniqueIds(employees, 'employee');
+  const employeeIds = new Set(employees.map(employee => employee.id));
+  const jobs = snapshot.jobs.map((job, index) => normalizeJob(job, index, employeeIds));
   assertUniqueIds(jobs, 'job');
 
-  const employeeIds = new Set(employees.map(employee => employee.id));
   const jobIds = new Set(jobs.map(job => job.id));
   const assignments = {};
 
@@ -268,6 +421,8 @@ function normalizeSnapshot(snapshot) {
           || !assignment || typeof assignment !== 'object' || Array.isArray(assignment)) return;
         normalizedEmployeeAssignments[jobId] = {
           hours: toNonNegativeNumber(assignment.hours),
+          status: ASSIGNMENT_STATUSES.includes(assignment.status) ? assignment.status : 'Proposed',
+          note: String(assignment.note || '').trim(),
           subtasks: Array.isArray(assignment.subtasks)
             ? assignment.subtasks.map(normalizeAssignmentSubtask).filter(Boolean)
             : []
@@ -280,11 +435,26 @@ function normalizeSnapshot(snapshot) {
     if (Object.keys(normalizedWeek).length > 0) assignments[weekKey] = normalizedWeek;
   });
 
-  const parsedDate = snapshot.currentWeekStart ? new Date(snapshot.currentWeekStart) : new Date();
+  const currentWeekValue = String(snapshot.currentWeekStart || '');
+  const parsedDate = WEEK_KEY_PATTERN.test(currentWeekValue)
+    ? new Date(`${currentWeekValue}T12:00:00`)
+    : snapshot.currentWeekStart ? new Date(snapshot.currentWeekStart) : new Date();
+  const tasks = normalizeArray(snapshot.tasks, item => normalizeTask(item, employeeIds, jobIds));
+  const timeOff = normalizeArray(snapshot.timeOff, item => normalizeTimeOff(item, employeeIds));
+  const checkIns = normalizeArray(snapshot.checkIns, item => normalizeCheckIn(item, employeeIds));
+  const goals = normalizeArray(snapshot.goals, item => normalizeGoal(item, employeeIds));
+  const oneOnOnes = normalizeArray(snapshot.oneOnOnes, item => normalizeOneOnOne(item, employeeIds));
+  const activity = normalizeArray(snapshot.activity, normalizeActivity).slice(0, 500);
   return {
     employees,
     jobs,
     assignments,
+    tasks,
+    timeOff,
+    checkIns,
+    goals,
+    oneOnOnes,
+    activity,
     currentWeekStart: startOfWeek(parsedDate)
   };
 }
@@ -303,11 +473,21 @@ function normalizeEmployee(employee, index) {
     name,
     weeklyBudget: budget,
     district: DISTRICTS.includes(employee.district) ? employee.district : DEFAULT_DISTRICT,
-    collapsed: Boolean(employee.collapsed)
+    collapsed: Boolean(employee.collapsed),
+    active: employee.active !== false,
+    archivedAt: normalizeDate(employee.archivedAt),
+    title: String(employee.title || '').trim(),
+    email: String(employee.email || '').trim(),
+    phone: String(employee.phone || '').trim(),
+    skills: Array.isArray(employee.skills)
+      ? employee.skills.map(skill => String(skill).trim()).filter(Boolean).slice(0, 30)
+      : String(employee.skills || '').split(',').map(skill => skill.trim()).filter(Boolean).slice(0, 30),
+    hireDate: normalizeDate(employee.hireDate),
+    managerNotes: String(employee.managerNotes || '').trim()
   };
 }
 
-function normalizeJob(job, index) {
+function normalizeJob(job, index, employeeIds) {
   if (!job || typeof job !== 'object') {
     throw new Error(`Job ${index + 1} is invalid.`);
   }
@@ -323,7 +503,13 @@ function normalizeJob(job, index) {
       : [],
     collapsed: Boolean(job.collapsed),
     subtaskGroupCollapsed: normalizeCollapsedGroups(job.subtaskGroupCollapsed),
-    hoursBudget: toNonNegativeNumber(job.hoursBudget)
+    hoursBudget: toNonNegativeNumber(job.hoursBudget),
+    ownerId: typeof job.ownerId === 'string' && employeeIds.has(job.ownerId) ? job.ownerId : '',
+    priority: PRIORITIES.includes(job.priority) ? job.priority : 'Medium',
+    health: PROJECT_HEALTH.includes(job.health) ? job.health : (job.category === 'Complete' ? 'Complete' : 'On track'),
+    startDate: normalizeDate(job.startDate),
+    dueDate: normalizeDate(job.dueDate),
+    description: String(job.description || '').trim()
   };
 }
 
@@ -352,6 +538,116 @@ function normalizeAssignmentSubtask(subtask) {
     color: normalizeColor(subtask.color, DEFAULT_COLOR),
     category: SUBTASK_CATEGORIES.includes(subtask.category) ? subtask.category : 'Other'
   };
+}
+
+function normalizeTask(task, employeeIds, jobIds) {
+  if (!task || typeof task !== 'object') return null;
+  const title = String(task.title || '').trim();
+  if (!title) return null;
+  return {
+    id: normalizeId(task.id, `task-${uuid()}`),
+    title,
+    projectId: typeof task.projectId === 'string' && jobIds.has(task.projectId) ? task.projectId : '',
+    assigneeId: typeof task.assigneeId === 'string' && employeeIds.has(task.assigneeId) ? task.assigneeId : '',
+    status: TASK_STATUSES.includes(task.status) ? task.status : 'To do',
+    priority: PRIORITIES.includes(task.priority) ? task.priority : 'Medium',
+    dueDate: normalizeDate(task.dueDate),
+    description: String(task.description || '').trim(),
+    createdAt: normalizeTimestamp(task.createdAt)
+  };
+}
+
+function normalizeTimeOff(entry, employeeIds) {
+  if (!entry || typeof entry !== 'object' || !employeeIds.has(entry.employeeId)) return null;
+  const startDate = normalizeDate(entry.startDate);
+  const endDate = normalizeDate(entry.endDate);
+  if (!startDate || !endDate || endDate < startDate) return null;
+  return {
+    id: normalizeId(entry.id, `leave-${uuid()}`),
+    employeeId: entry.employeeId,
+    type: ['Vacation', 'Sick', 'Training', 'Other'].includes(entry.type) ? entry.type : 'Other',
+    startDate,
+    endDate,
+    hoursPerWeek: toNonNegativeNumber(entry.hoursPerWeek),
+    status: ['Pending', 'Approved', 'Declined'].includes(entry.status) ? entry.status : 'Pending',
+    note: String(entry.note || '').trim()
+  };
+}
+
+function normalizeCheckIn(entry, employeeIds) {
+  if (!entry || typeof entry !== 'object' || !employeeIds.has(entry.employeeId)
+    || !WEEK_KEY_PATTERN.test(entry.weekKey || '')) return null;
+  return {
+    id: normalizeId(entry.id, `checkin-${uuid()}`),
+    employeeId: entry.employeeId,
+    weekKey: entry.weekKey,
+    accomplishments: String(entry.accomplishments || '').trim(),
+    blockers: String(entry.blockers || '').trim(),
+    nextWeek: String(entry.nextWeek || '').trim(),
+    morale: Math.min(5, Math.max(1, Number(entry.morale) || 3)),
+    submittedAt: normalizeTimestamp(entry.submittedAt)
+  };
+}
+
+function normalizeGoal(goal, employeeIds) {
+  if (!goal || typeof goal !== 'object' || !employeeIds.has(goal.employeeId)) return null;
+  const title = String(goal.title || '').trim();
+  if (!title) return null;
+  return {
+    id: normalizeId(goal.id, `goal-${uuid()}`),
+    employeeId: goal.employeeId,
+    title,
+    dueDate: normalizeDate(goal.dueDate),
+    status: ['Not started', 'In progress', 'At risk', 'Complete'].includes(goal.status)
+      ? goal.status
+      : 'Not started',
+    progress: Math.min(100, Math.max(0, Number(goal.progress) || 0)),
+    note: String(goal.note || '').trim()
+  };
+}
+
+function normalizeOneOnOne(meeting, employeeIds) {
+  if (!meeting || typeof meeting !== 'object' || !employeeIds.has(meeting.employeeId)) return null;
+  return {
+    id: normalizeId(meeting.id, `one-on-one-${uuid()}`),
+    employeeId: meeting.employeeId,
+    date: normalizeDate(meeting.date),
+    agenda: String(meeting.agenda || '').trim(),
+    notes: String(meeting.notes || '').trim(),
+    actions: String(meeting.actions || '').trim(),
+    complete: Boolean(meeting.complete)
+  };
+}
+
+function normalizeActivity(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const message = String(entry.message || '').trim();
+  if (!message) return null;
+  return {
+    id: normalizeId(entry.id, `activity-${uuid()}`),
+    timestamp: normalizeTimestamp(entry.timestamp),
+    type: String(entry.type || 'Update'),
+    message,
+    entityType: String(entry.entityType || ''),
+    entityId: String(entry.entityId || '')
+  };
+}
+
+function normalizeArray(value, normalizer) {
+  if (!Array.isArray(value)) return [];
+  return value.map(normalizer).filter(Boolean);
+}
+
+function normalizeDate(value) {
+  const date = String(value || '');
+  return WEEK_KEY_PATTERN.test(date) && !Number.isNaN(new Date(`${date}T12:00:00`).getTime())
+    ? date
+    : '';
+}
+
+function normalizeTimestamp(value) {
+  const date = value ? new Date(value) : new Date();
+  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
 }
 
 function normalizeCollapsedGroups(groups) {

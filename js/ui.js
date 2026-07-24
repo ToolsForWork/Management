@@ -7,6 +7,7 @@ import {
   JOB_STATUSES,
   JOB_CLASSES,
   SUBTASK_CATEGORIES,
+  ASSIGNMENT_STATUSES,
   uuid,
   pickUnusedColor,
   getCurrentWeekKey,
@@ -14,8 +15,9 @@ import {
   ensureEmployeeAssignmentsForWeek,
   ensureAssignment,
   removeJobFromAssignments,
-  removeEmployeeFromAssignments,
   totalHoursForEmployeeWeek,
+  getEffectiveEmployeeCapacity,
+  recordActivity,
   scheduleSave
 } from './data.js';
 
@@ -57,9 +59,16 @@ export function addJob(name, category, jobClass, color) {
     subtasks: [],
     collapsed: false,
     subtaskGroupCollapsed: {},
-    hoursBudget: 0
+    hoursBudget: 0,
+    ownerId: '',
+    priority: 'Medium',
+    health: category === 'Complete' ? 'Complete' : 'On track',
+    startDate: '',
+    dueDate: '',
+    description: ''
   });
 
+  recordActivity('Project', `${normalizedName} created.`, 'project', data.jobs[data.jobs.length - 1].id);
   renderJobs();
   forceChartUpdate();
   scheduleSave();
@@ -71,7 +80,11 @@ export function removeJob(jobId) {
   const job = data.jobs.find(candidate => candidate.id === jobId);
   if (!job || !window.confirm(`Remove "${job.name}" and all of its assignments?`)) return;
   data.jobs = data.jobs.filter(j => j.id !== jobId);
+  data.tasks.forEach(task => {
+    if (task.projectId === jobId) task.projectId = '';
+  });
   removeJobFromAssignments(jobId);
+  recordActivity('Project', `${job.name} removed.`, 'project', jobId);
   renderJobs();
   renderEmployees();
   forceChartUpdate();
@@ -102,9 +115,17 @@ export function addEmployee(name, weeklyBudget, district) {
     name: normalizedName,
     weeklyBudget: budget,
     district: DISTRICTS.includes(district) ? district : DEFAULT_DISTRICT,
-    collapsed: false
+    collapsed: false,
+    active: true,
+    title: '',
+    email: '',
+    phone: '',
+    skills: [],
+    hireDate: '',
+    managerNotes: ''
   });
 
+  recordActivity('People', `${normalizedName} added to the team.`, 'employee', data.employees[data.employees.length - 1].id);
   renderEmployees();
   forceChartUpdate();
   scheduleSave();
@@ -114,9 +135,13 @@ export function addEmployee(name, weeklyBudget, district) {
 
 export function removeEmployee(empId) {
   const employee = data.employees.find(candidate => candidate.id === empId);
-  if (!employee || !window.confirm(`Remove "${employee.name}" and all of their assignments?`)) return;
-  data.employees = data.employees.filter(e => e.id !== empId);
-  removeEmployeeFromAssignments(empId);
+  if (!employee || !window.confirm(`Archive "${employee.name}"? Their historical assignments and records will be preserved.`)) return;
+  employee.active = false;
+  employee.archivedAt = getCurrentWeekKey();
+  Object.entries(data.assignments).forEach(([weekKey, week]) => {
+    if (weekKey >= employee.archivedAt) delete week[employee.id];
+  });
+  recordActivity('People', `${employee.name} archived.`, 'employee', employee.id);
   renderEmployees();
   forceChartUpdate();
   scheduleSave();
@@ -277,6 +302,17 @@ export function renderJobs() {
     );
 
     div.appendChild(headerRow);
+
+    const metadata = document.createElement('div');
+    metadata.className = 'planner-meta-row';
+    metadata.append(
+      createMetaChip(job.health || 'On track', `health-${(job.health || 'on-track').toLowerCase().replaceAll(' ', '-')}`),
+      createMetaChip(job.priority || 'Medium', `priority-${(job.priority || 'medium').toLowerCase()}`)
+    );
+    if (job.dueDate) metadata.appendChild(createMetaChip(`Due ${job.dueDate}`, 'meta-neutral'));
+    const owner = data.employees.find(employee => employee.id === job.ownerId);
+    if (owner) metadata.appendChild(createMetaChip(owner.name, 'meta-neutral'));
+    div.appendChild(metadata);
 
     /* ---------------- Subtasks ---------------- */
     const subtasksContainer = document.createElement('div');
@@ -502,14 +538,15 @@ export function renderEmployees() {
   const weekKey = getCurrentWeekKey();
   const query = document.getElementById('employeeSearchInput')?.value.trim().toLowerCase() || '';
   const visibleEmployees = query
-    ? data.employees.filter(employee => employee.name.toLowerCase().includes(query)
-      || employee.district.toLowerCase().includes(query))
-    : data.employees;
+    ? data.employees.filter(employee => employee.active !== false && (employee.name.toLowerCase().includes(query)
+      || employee.district.toLowerCase().includes(query)))
+    : data.employees.filter(employee => employee.active !== false);
 
   if (visibleEmployees.length === 0) {
+    const hasActiveEmployees = data.employees.some(employee => employee.active !== false);
     employeesListEl.appendChild(createEmptyState(
-      data.employees.length === 0 ? 'No employees yet' : 'No employees match your search',
-      data.employees.length === 0
+      !hasActiveEmployees ? 'No active employees' : 'No employees match your search',
+      !hasActiveEmployees
         ? 'Add the first team member above to begin planning.'
         : 'Try a different employee or district name.'
     ));
@@ -567,6 +604,7 @@ export function renderEmployees() {
       districtSpan.appendChild(districtSelect);
 
       const total = totalHoursForEmployeeWeek(weekKey, emp.id);
+      const effectiveCapacity = getEffectiveEmployeeCapacity(emp, weekKey);
 
       const budgetSpan = document.createElement('span');
       budgetSpan.className = 'employee-budget';
@@ -608,8 +646,8 @@ export function renderEmployees() {
 
       const removeBtn = document.createElement('button');
       removeBtn.className = 'icon-button danger-button';
-      removeBtn.textContent = '×';
-      removeBtn.title = `Remove ${emp.name}`;
+      removeBtn.textContent = '⊘';
+      removeBtn.title = `Archive ${emp.name}`;
       removeBtn.setAttribute('aria-label', removeBtn.title);
       removeBtn.onclick = () => removeEmployee(emp.id);
 
@@ -618,15 +656,16 @@ export function renderEmployees() {
       /* ---------------- Gauge ---------------- */
       const gaugeLabel = document.createElement('div');
       gaugeLabel.className = 'gauge-label';
-      const pct = emp.weeklyBudget > 0 ? Math.round((total / emp.weeklyBudget) * 100) : 0;
-      gaugeLabel.textContent = `${pct}% utilized · ${formatHours(Math.max(0, emp.weeklyBudget - total))} hrs available`;
+      const pct = effectiveCapacity > 0 ? Math.round((total / effectiveCapacity) * 100) : total > 0 ? 100 : 0;
+      const leaveReduction = Math.max(0, emp.weeklyBudget - effectiveCapacity);
+      gaugeLabel.textContent = `${pct}% utilized · ${formatHours(Math.max(0, effectiveCapacity - total))} hrs available${leaveReduction ? ` · ${formatHours(leaveReduction)} hrs leave` : ''}`;
 
       const gauge = document.createElement('div');
       gauge.className = 'gauge';
       if (pct > 100) gauge.classList.add('over-budget');
 
       const empAssignments = getEmployeeAssignmentsForWeek(weekKey, emp.id);
-      const gaugeMax = Math.max(total, emp.weeklyBudget || 0, 1);
+      const gaugeMax = Math.max(total, effectiveCapacity, 1);
       let offset = 0;
 
       Object.entries(empAssignments).forEach(([jobId, a]) => {
@@ -683,7 +722,7 @@ export function renderEmployees() {
         }
       });
 
-      const unutilized = Math.max(0, emp.weeklyBudget - total);
+      const unutilized = Math.max(0, effectiveCapacity - total);
       if (unutilized > 0) {
         const unPct = (unutilized / gaugeMax) * 100;
         const fill = document.createElement('div');
@@ -693,8 +732,8 @@ export function renderEmployees() {
         gauge.appendChild(fill);
       }
 
-      if (emp.weeklyBudget > 0 && total > emp.weeklyBudget) {
-        const markerPct = (emp.weeklyBudget / gaugeMax) * 100;
+      if (effectiveCapacity > 0 && total > effectiveCapacity) {
+        const markerPct = (effectiveCapacity / gaugeMax) * 100;
         const marker = document.createElement('div');
         marker.style.cssText = `
           position:absolute;top:0;bottom:0;
@@ -820,12 +859,18 @@ export function renderEmployees() {
         hoursInput.step = '0.25';
         hoursInput.value = assignment.hours || 0;
         hoursInput.setAttribute('aria-label', `${job.name} hours for ${emp.name}`);
+        const originalHours = Number(assignment.hours) || 0;
         hoursInput.oninput = () => {
           assignment.hours = Math.max(0, Number(hoursInput.value) || 0);
           forceChartUpdate();
           scheduleSave();
         };
-        hoursInput.onchange = renderEmployees;
+        hoursInput.onchange = () => {
+          if (assignment.hours !== originalHours) {
+            recordActivity('Allocation', `${emp.name}'s ${job.name} allocation changed to ${formatHours(assignment.hours)} hours.`, 'employee', emp.id);
+          }
+          renderEmployees();
+        };
 
         const removeAssignBtn = document.createElement('button');
         removeAssignBtn.className = 'icon-button danger-button';
@@ -835,6 +880,40 @@ export function renderEmployees() {
         removeAssignBtn.onclick = () => removeAssignment(weekKey, emp.id, jobId);
 
         top.append(label, hoursInput, removeAssignBtn);
+
+        const responseRow = document.createElement('div');
+        responseRow.className = 'assignment-response';
+        const responseSelect = document.createElement('select');
+        responseSelect.setAttribute('aria-label', `Assignment response for ${job.name} and ${emp.name}`);
+        ASSIGNMENT_STATUSES.forEach(status => {
+          const option = document.createElement('option');
+          option.value = status;
+          option.textContent = status;
+          option.selected = (assignment.status || 'Proposed') === status;
+          responseSelect.appendChild(option);
+        });
+        const responseNote = document.createElement('input');
+        responseNote.type = 'text';
+        responseNote.placeholder = 'Assignment note or change request';
+        responseNote.setAttribute('aria-label', `Assignment note for ${job.name} and ${emp.name}`);
+        responseNote.value = assignment.note || '';
+        responseSelect.addEventListener('change', () => {
+          assignment.status = responseSelect.value;
+          recordActivity('Assignment', `${emp.name} marked ${job.name} ${assignment.status.toLowerCase()}.`, 'employee', emp.id);
+          scheduleSave();
+          document.dispatchEvent(new CustomEvent('planner:datachange'));
+          showToast(`Assignment marked ${assignment.status.toLowerCase()}.`);
+        });
+        responseNote.addEventListener('input', () => {
+          assignment.note = responseNote.value.trim();
+          scheduleSave();
+        });
+        responseNote.addEventListener('change', () => {
+          recordActivity('Assignment', `${emp.name}'s note for ${job.name} updated.`, 'employee', emp.id);
+          scheduleSave();
+          document.dispatchEvent(new CustomEvent('planner:datachange'));
+        });
+        responseRow.append(responseSelect, responseNote);
 
         /* ---------------- Subtask List ---------------- */
         const subList = document.createElement('div');
@@ -936,9 +1015,9 @@ export function renderEmployees() {
           const warning = document.createElement('div');
           warning.className = 'inline-warning';
           warning.textContent = `Subtasks total ${formatHours(subtaskTotal)} hrs, above the ${formatHours(assignment.hours)} project total.`;
-          row.append(top, warning, subInputRow, subList);
+          row.append(top, responseRow, warning, subInputRow, subList);
         } else {
-          row.append(top, subInputRow, subList);
+          row.append(top, responseRow, subInputRow, subList);
         }
         dropzone.appendChild(row);
       });
@@ -1062,6 +1141,13 @@ function createEmptyState(title, description) {
 
 function formatHours(value) {
   return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function createMetaChip(label, className) {
+  const chip = document.createElement('span');
+  chip.className = `planner-meta-chip ${className}`;
+  chip.textContent = label;
+  return chip;
 }
 
 function makeKeyboardClickable(element, action) {
