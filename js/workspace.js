@@ -10,13 +10,22 @@ import {
   scheduleSave,
   PRIORITIES,
   TASK_STATUSES,
-  PROJECT_HEALTH
+  PROJECT_HEALTH,
+  DISTRICTS,
+  ORG_ROLES,
+  canManageActionItem,
+  canAssignActionItem,
+  canWorkActionItem,
+  getEmployeeDescendantIds,
+  getTaskActualHours,
+  getTaskVariance
 } from './data.js';
 import { showToast, renderJobs, renderEmployees } from './ui.js';
 import { forceChartUpdate } from './charts.js';
 
 let activeTab = 'overview';
 let dialogSubmit = null;
+let draggedActionItemId = '';
 
 export function initializeWorkspace() {
   document.getElementById('workspaceBtn').addEventListener('click', openWorkspace);
@@ -25,6 +34,11 @@ export function initializeWorkspace() {
     const button = event.target.closest('[data-workspace-tab]');
     if (!button) return;
     activeTab = button.dataset.workspaceTab;
+    renderWorkspace();
+  });
+  document.getElementById('workspaceIdentitySelect').addEventListener('change', event => {
+    data.currentUserId = event.target.value;
+    scheduleSave();
     renderWorkspace();
   });
 
@@ -54,6 +68,7 @@ export function refreshWorkspaceSummary() {
 
 export function renderWorkspace() {
   refreshWorkspaceSummary();
+  refreshIdentitySelector();
   document.querySelectorAll('[data-workspace-tab]').forEach(button => {
     const selected = button.dataset.workspaceTab === activeTab;
     button.classList.toggle('active', selected);
@@ -67,9 +82,32 @@ export function renderWorkspace() {
     projects: renderProjects,
     tasks: renderTasks,
     people: renderPeople,
+    roster: renderRoster,
     activity: renderActivity
   };
   content.appendChild((renderers[activeTab] || renderOverview)());
+}
+
+function refreshIdentitySelector() {
+  const select = document.getElementById('workspaceIdentitySelect');
+  const help = document.getElementById('workspaceIdentityHelp');
+  const setup = isSetupMode();
+  select.replaceChildren();
+  if (setup) {
+    const option = new Option('Roster setup · Full access', '');
+    select.appendChild(option);
+    help.textContent = 'Add a DM to establish the department hierarchy.';
+    return;
+  }
+  select.appendChild(new Option('Select your roster identity…', ''));
+  activeEmployees()
+    .sort((left, right) => roleRank(right.rosterRole) - roleRank(left.rosterRole) || left.name.localeCompare(right.name))
+    .forEach(employee => select.appendChild(new Option(`${employee.name} · ${employee.rosterRole}`, employee.id)));
+  select.value = data.currentUserId;
+  const actor = currentActor();
+  help.textContent = actor
+    ? `${actor.rosterRole} permissions apply.`
+    : 'Select your identity to enable permitted actions.';
 }
 
 function openWorkspace() {
@@ -234,6 +272,8 @@ function projectCard(project) {
   const owner = employeeById(project.ownerId);
   const charged = totalProjectHours(project.id);
   const progress = project.hoursBudget > 0 ? Math.min(100, Math.round((charged / project.hoursBudget) * 100)) : 0;
+  const completedActions = data.tasks.filter(task => task.projectId === project.id && task.progress >= 100);
+  const actionVariance = completedActions.reduce((total, task) => total + getTaskVariance(task), 0);
   const heading = element('div', 'portfolio-card-heading');
   const title = element('div');
   title.append(element('h3', '', project.name), element('span', '', owner ? `Owner: ${owner.name}` : 'Owner not assigned'));
@@ -257,6 +297,9 @@ function projectCard(project) {
   const footer = element('div', 'portfolio-card-footer');
   footer.append(
     element('span', '', `${data.tasks.filter(task => task.projectId === project.id && task.status !== 'Done').length} open actions`),
+    element('span', '', completedActions.length
+      ? `${formatHours(Math.abs(actionVariance))}h ${actionVariance >= 0 ? 'gain' : 'loss'}`
+      : 'No completed action variance'),
     element('span', '', project.startDate && project.dueDate
       ? `${project.startDate} → ${project.dueDate}`
       : project.dueDate ? `Due ${project.dueDate}`
@@ -269,9 +312,9 @@ function projectCard(project) {
 
 function renderTasks() {
   const wrapper = element('div', 'workspace-view');
-  const heading = viewHeading('Action items', 'Track accountable work across every project and team member.');
-  heading.appendChild(actionButton('Add action', () => openTaskForm()));
-  wrapper.appendChild(heading);
+  const heading = viewHeading('Action item list', 'Project and unutilized work, with charging codes, budgets, progress, and handoffs.');
+  if (canCreateActionItems()) heading.appendChild(actionButton('Add action', () => openTaskForm()));
+  wrapper.append(heading, renderAssignmentTargets());
 
   const controls = element('div', 'workspace-filters');
   const search = fieldControl('search', 'Search actions', '');
@@ -285,7 +328,7 @@ function renderTasks() {
     list.replaceChildren();
     const query = search.input.value.trim().toLowerCase();
     const tasks = data.tasks
-      .filter(task => !query || task.title.toLowerCase().includes(query) || task.description.toLowerCase().includes(query))
+      .filter(task => !query || [task.title, task.description, task.wbs, task.io].some(value => String(value || '').toLowerCase().includes(query)))
       .filter(task => !status.input.value || task.status === status.input.value)
       .filter(task => !owner.input.value || task.assigneeId === owner.input.value)
       .sort(taskComparator);
@@ -293,16 +336,10 @@ function renderTasks() {
       list.appendChild(emptyState('No matching actions', data.tasks.length ? 'Adjust the filters to see more work.' : 'Add the first action item.'));
       return;
     }
-    TASK_STATUSES.forEach(groupStatus => {
-      const groupTasks = tasks.filter(task => task.status === groupStatus);
-      if (!groupTasks.length) return;
-      const group = element('section', 'task-group');
-      const groupHeading = element('div', 'task-group-heading');
-      groupHeading.append(element('h3', '', groupStatus), chip(groupTasks.length, 'chip-neutral'));
-      group.appendChild(groupHeading);
-      groupTasks.forEach(task => group.appendChild(taskRow(task)));
-      list.appendChild(group);
-    });
+    list.append(
+      taskSection('Projects', tasks.filter(task => task.projectId), true),
+      taskSection('Unutilized', tasks.filter(task => !task.projectId), false)
+    );
   };
   [search.input, status.input, owner.input].forEach(input => input.addEventListener('input', refresh));
   refresh();
@@ -310,34 +347,185 @@ function renderTasks() {
   return wrapper;
 }
 
+function taskSection(title, tasks, groupByProject) {
+  const section = element('section', 'action-list-section');
+  const heading = element('div', 'task-group-heading');
+  heading.append(element('h3', '', title), chip(tasks.length, 'chip-neutral'));
+  section.appendChild(heading);
+  if (!tasks.length) {
+    section.appendChild(emptyState(`No ${title.toLowerCase()} actions`, title === 'Unutilized'
+      ? 'Overhead, training, and development work appears here.'
+      : 'Project action items appear here.'));
+    return section;
+  }
+  if (!groupByProject) {
+    tasks.forEach(task => section.appendChild(taskRow(task)));
+    return section;
+  }
+  [...new Set(tasks.map(task => task.projectId))]
+    .sort((left, right) => (projectById(left)?.name || '').localeCompare(projectById(right)?.name || ''))
+    .forEach(projectId => {
+      const group = element('div', 'action-project-group');
+      group.appendChild(element('h4', '', projectById(projectId)?.name || 'Former project'));
+      tasks.filter(task => task.projectId === projectId).forEach(task => group.appendChild(taskRow(task)));
+      section.appendChild(group);
+    });
+  return section;
+}
+
+function renderAssignmentTargets() {
+  const actor = currentActor();
+  const wrapper = element('section', 'task-assignment-panel');
+  wrapper.appendChild(element('strong', '', 'Drag an action to assign'));
+  if (!actor) {
+    wrapper.appendChild(element('span', '', isSetupMode()
+      ? 'Add a roster identity before assigning work.'
+      : 'Select your roster identity to self-assign or delegate work.'));
+    return wrapper;
+  }
+  const targets = element('div', 'task-assignment-targets');
+  const candidateIds = new Set([actor.id, ...getEmployeeDescendantIds(actor.id)]);
+  activeEmployees().filter(employee => candidateIds.has(employee.id)).forEach(employee => {
+    const target = element('div', 'task-assignment-target');
+    target.append(avatar(employee.name), element('span', '', employee.id === actor.id ? 'My queue' : employee.name));
+    target.addEventListener('dragover', event => {
+      const task = taskFromDrag(event);
+      if (task && canAssignActionItem(actor.id, employee.id, task)) {
+        event.preventDefault();
+        target.classList.add('over');
+      }
+    });
+    target.addEventListener('dragleave', () => target.classList.remove('over'));
+    target.addEventListener('drop', event => {
+      event.preventDefault();
+      target.classList.remove('over');
+      const task = taskFromDrag(event);
+      if (task && canAssignActionItem(actor.id, employee.id, task)) assignTask(task, employee.id);
+    });
+    targets.appendChild(target);
+  });
+  wrapper.appendChild(targets);
+  return wrapper;
+}
+
 function taskRow(task) {
   const row = element('article', `task-row priority-${(task.priority || 'medium').toLowerCase()}`);
+  row.draggable = Boolean(currentActor() && (!task.assigneeId || canManageTask(task)));
+  row.addEventListener('dragstart', event => {
+    draggedActionItemId = task.id;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-action-item', task.id);
+    event.dataTransfer.setData('text/plain', task.id);
+  });
+  row.addEventListener('dragend', () => {
+    draggedActionItemId = '';
+  });
   const main = element('div', 'task-main');
   const top = element('div', 'task-title-row');
-  top.append(element('strong', '', task.title), chip(task.priority, priorityClass(task.priority)));
-  const meta = [
-    projectById(task.projectId)?.name || 'No project',
+  top.append(
+    element('strong', '', task.title),
+    chip(task.status, task.status === 'Done' ? 'chip-success' : task.status === 'Blocked' ? 'chip-danger' : 'chip-neutral'),
+    chip(task.priority, priorityClass(task.priority))
+  );
+  const actual = getTaskActualHours(task);
+  const variance = getTaskVariance(task);
+  const result = variance >= 0 ? `${formatHours(variance)}h gain` : `${formatHours(Math.abs(variance))}h loss`;
+  main.append(top, element('span', '', [
+    projectById(task.projectId)?.name || 'Unutilized',
     employeeById(task.assigneeId)?.name || 'Unassigned',
-    task.dueDate ? `Due ${task.dueDate}` : 'No due date'
-  ].join(' · ');
-  main.append(top, element('span', '', meta));
+    `${formatHours(actual)} / ${formatHours(task.budgetHours)} budget hrs`,
+    task.progress >= 100 ? result : `${task.progress}% complete`
+  ].join(' · ')));
+  const codes = element('div', 'task-code-row');
+  codes.append(
+    chip(`WBS: ${task.wbs || 'Not set'}`, task.wbs ? 'chip-info' : 'chip-warning'),
+    chip(`IO: ${task.io || 'Not set'}`, task.io ? 'chip-info' : 'chip-warning')
+  );
+  main.appendChild(codes);
+  const progressTrack = element('div', 'progress-track task-progress');
+  const progressFill = element('div', 'progress-fill');
+  progressFill.style.width = `${task.progress}%`;
+  progressTrack.appendChild(progressFill);
+  main.appendChild(progressTrack);
   if (task.description) main.appendChild(element('p', '', task.description));
+  if (task.notes?.length) {
+    const notes = element('div', 'task-note-preview');
+    task.notes.slice(-2).reverse().forEach(note => {
+      notes.appendChild(element('span', '', `${employeeById(note.employeeId)?.name || 'Team'} · ${note.progress}% — ${note.text}`));
+    });
+    main.appendChild(notes);
+  }
 
   const actions = element('div', 'task-actions');
-  const status = selectElement(TASK_STATUSES, task.status);
-  status.setAttribute('aria-label', `Status for ${task.title}`);
-  status.addEventListener('change', () => {
-    task.status = status.value;
-    commit('Task', `${task.title} moved to ${task.status}.`, 'task', task.id);
-    renderWorkspace();
-  });
-  actions.append(
-    status,
-    actionButton('Edit', () => openTaskForm(task), 'secondary-button'),
-    iconButton('×', `Delete ${task.title}`, () => deleteTask(task))
-  );
+  const actor = currentActor();
+  if (actor && !task.assigneeId && canAssignActionItem(actor.id, actor.id, task)) {
+    actions.appendChild(actionButton('Assign to me', () => assignTask(task, actor.id)));
+  }
+  if (actor && canWorkActionItem(actor.id, task) && task.progress < 100) {
+    actions.append(
+      actionButton('Log work', () => openTaskWorkForm(task)),
+      actionButton('Release for handoff', () => releaseTask(task), 'secondary-button')
+    );
+  }
+  if (canManageTask(task)) {
+    const options = [['', 'Unassigned'], ...eligibleAssignees(task).map(employee => [employee.id, employee.name])];
+    if (task.assigneeId && !options.some(([id]) => id === task.assigneeId)) {
+      options.push([task.assigneeId, employeeById(task.assigneeId)?.name || 'Current assignee']);
+    }
+    const assign = selectElement(options, task.assigneeId);
+    assign.setAttribute('aria-label', `Assign ${task.title}`);
+    assign.addEventListener('change', () => assign.value ? assignTask(task, assign.value) : releaseTask(task, true));
+    actions.append(
+      assign,
+      actionButton('Add note', () => openTaskNoteForm(task), 'secondary-button'),
+      actionButton('Edit', () => openTaskForm(task), 'secondary-button'),
+      iconButton('×', `Delete ${task.title}`, () => deleteTask(task))
+    );
+  }
   row.append(main, actions);
   return row;
+}
+
+function renderRoster() {
+  const wrapper = element('div', 'workspace-view');
+  const heading = viewHeading('Department roster', 'DM → ADM → Lead → Estimator reporting structure.');
+  if (canAddRosterMember()) heading.appendChild(actionButton('Add roster member', () => openRosterForm()));
+  wrapper.appendChild(heading);
+  if (!data.employees.length) {
+    wrapper.appendChild(emptyState('Build the department roster', 'Add the DM first, then add each reporting level.'));
+    return wrapper;
+  }
+  const tree = element('div', 'roster-tree');
+  const activeIds = new Set(data.employees.map(employee => employee.id));
+  const roots = data.employees
+    .filter(employee => !employee.managerId || !activeIds.has(employee.managerId))
+    .sort(rosterComparator);
+  roots.forEach(employee => tree.appendChild(rosterBranch(employee, new Set())));
+  wrapper.appendChild(tree);
+  return wrapper;
+}
+
+function rosterBranch(employee, visited) {
+  const branch = element('div', 'roster-branch');
+  if (visited.has(employee.id)) return branch;
+  const nextVisited = new Set(visited).add(employee.id);
+  const card = element('article', `roster-card${employee.active === false ? ' archived' : ''}`);
+  const identity = element('div', 'person-identity');
+  identity.append(avatar(employee.name), element('div'));
+  identity.lastChild.append(
+    element('h3', '', employee.name),
+    element('span', '', `${employee.rosterRole} · ${employee.district}`)
+  );
+  card.append(identity, chip(employee.active === false ? 'Archived' : `${formatHours(employee.weeklyBudget)}h`, 'chip-neutral'));
+  if (canEditRosterMember(employee)) card.appendChild(actionButton('Edit', () => openRosterForm(employee), 'secondary-button'));
+  branch.appendChild(card);
+  const reports = data.employees.filter(candidate => candidate.managerId === employee.id).sort(rosterComparator);
+  if (reports.length) {
+    const children = element('div', 'roster-children');
+    reports.forEach(report => children.appendChild(rosterBranch(report, nextVisited)));
+    branch.appendChild(children);
+  }
+  return branch;
 }
 
 function renderPeople() {
@@ -457,13 +645,33 @@ function openProjectForm(project) {
 
 function openTaskForm(task = null) {
   const editing = Boolean(task);
+  if (editing && !canManageTask(task)) {
+    showToast('Your roster role cannot edit this action item.');
+    return;
+  }
+  const actor = currentActor();
+  const projects = manageableProjects();
+  const allowUnutilized = isSetupMode() || actor?.rosterRole === 'DM' || actor?.rosterRole === 'ADM';
+  const projectOptions = [
+    ...(allowUnutilized ? [['', 'Unutilized']] : []),
+    ...projects.map(project => [project.id, project.name])
+  ];
+  const defaultProjectId = task?.projectId || (allowUnutilized ? '' : projects[0]?.id || '');
+  const scopeCandidates = isSetupMode()
+    ? activeEmployees()
+    : actor ? activeEmployees().filter(employee => employee.id === actor.id || getEmployeeDescendantIds(actor.id).has(employee.id)) : [];
+  const delegateCandidates = isSetupMode() ? activeEmployees() : delegatableEmployees();
   openForm({
     eyebrow: 'Action items',
     title: editing ? `Edit ${task.title}` : 'Add action item',
     fields: [
       field('title', 'Action', 'text', task?.title || '', null, true),
-      field('projectId', 'Project', 'select', task?.projectId || '', [['', 'No project'], ...data.jobs.map(project => [project.id, project.name])]),
-      field('assigneeId', 'Assignee', 'select', task?.assigneeId || '', [['', 'Unassigned'], ...activeEmployees().map(employee => [employee.id, employee.name])]),
+      field('projectId', 'Section / project', 'select', defaultProjectId, projectOptions),
+      field('scopeOwnerId', 'Owning group / lead', 'select', task?.scopeOwnerId || actor?.id || '', [['', 'Select scope…'], ...scopeCandidates.map(employee => [employee.id, `${employee.name} · ${employee.rosterRole}`])]),
+      field('assigneeId', 'Assignee', 'select', task?.assigneeId || '', [['', 'Unassigned'], ...delegateCandidates.map(employee => [employee.id, employee.name])]),
+      field('budgetHours', 'Estimated hour budget', 'number', task?.budgetHours ?? '', null, true),
+      field('wbs', 'WBS', 'text', task?.wbs || ''),
+      field('io', 'IO', 'text', task?.io || ''),
       field('status', 'Status', 'select', task?.status || 'To do', TASK_STATUSES),
       field('priority', 'Priority', 'select', task?.priority || 'Medium', PRIORITIES),
       field('dueDate', 'Due date', 'date', task?.dueDate || ''),
@@ -474,13 +682,174 @@ function openTaskForm(task = null) {
         showToast('Enter an action-item title.');
         return false;
       }
+      values.budgetHours = Number(values.budgetHours);
+      if (!Number.isFinite(values.budgetHours) || values.budgetHours <= 0) {
+        showToast('Enter an estimated hour budget greater than zero.');
+        return false;
+      }
+      if (!values.projectId && !values.scopeOwnerId) {
+        showToast('Choose the group responsible for this unutilized action.');
+        return false;
+      }
+      const candidate = { ...(task || {}), ...values };
+      if (!isSetupMode() && !canManageActionItem(actor?.id, candidate)) {
+        showToast('Your roster role cannot create or edit work in that scope.');
+        return false;
+      }
+      if (values.assigneeId && !isSetupMode() && !canAssignActionItem(actor?.id, values.assigneeId, candidate)) {
+        showToast('You can only assign this work to yourself or someone below you.');
+        return false;
+      }
+      values.updatedAt = new Date().toISOString();
       if (editing) {
         Object.assign(task, values);
+        if (task.status === 'Done') task.progress = 100;
+        if (task.progress >= 100) task.status = 'Done';
         commit('Task', `${task.title} updated.`, 'task', task.id);
       } else {
-        const created = { id: uuid(), ...values, createdAt: new Date().toISOString() };
+        const created = {
+          id: uuid(),
+          ...values,
+          progress: values.status === 'Done' ? 100 : 0,
+          assignedById: values.assigneeId ? actor?.id || '' : '',
+          workLogs: [],
+          notes: [],
+          createdAt: new Date().toISOString()
+        };
         data.tasks.push(created);
         commit('Task', `${created.title} created.`, 'task', created.id);
+      }
+      return true;
+    }
+  });
+}
+
+function openTaskWorkForm(task) {
+  const actor = currentActor();
+  if (!actor || !canWorkActionItem(actor.id, task)) {
+    showToast('Only the currently assigned employee can log work.');
+    return;
+  }
+  openForm({
+    eyebrow: 'Action progress',
+    title: task.title,
+    fields: [
+      field('hours', 'Hours to add', 'number', 0),
+      field('progress', 'Total % complete', 'number', task.progress),
+      field('note', 'Work note', 'textarea', '')
+    ],
+    onSave: values => {
+      const hours = Number(values.hours) || 0;
+      const progress = Math.min(100, Math.max(0, Number(values.progress) || 0));
+      if (progress < task.progress) {
+        showToast('Task progress cannot move backward.');
+        return false;
+      }
+      if (hours <= 0 && !values.note.trim() && progress === task.progress) {
+        showToast('Add hours, a note, or updated progress.');
+        return false;
+      }
+      if (hours > 0) {
+        task.workLogs.push({ id: uuid(), employeeId: actor.id, hours, createdAt: new Date().toISOString() });
+      }
+      if (values.note.trim()) {
+        task.notes.push({
+          id: uuid(),
+          employeeId: actor.id,
+          text: values.note.trim(),
+          progress,
+          createdAt: new Date().toISOString()
+        });
+      }
+      task.progress = progress;
+      task.status = progress >= 100 ? 'Done' : 'In progress';
+      task.updatedAt = new Date().toISOString();
+      const variance = getTaskVariance(task);
+      const outcome = progress >= 100
+        ? ` with a ${formatHours(Math.abs(variance))} hour ${variance >= 0 ? 'gain' : 'loss'}`
+        : ` to ${progress}%`;
+      commit('Action work', `${actor.name} updated ${task.title}${outcome}.`, 'task', task.id);
+      return true;
+    }
+  });
+}
+
+function openTaskNoteForm(task) {
+  openForm({
+    eyebrow: 'Action note',
+    title: task.title,
+    fields: [field('note', 'Note', 'textarea', '', null, true)],
+    onSave: values => {
+      if (!values.note.trim()) return false;
+      task.notes.push({
+        id: uuid(),
+        employeeId: currentActor()?.id || '',
+        text: values.note.trim(),
+        progress: task.progress,
+        createdAt: new Date().toISOString()
+      });
+      task.updatedAt = new Date().toISOString();
+      commit('Task note', `A note was added to ${task.title}.`, 'task', task.id);
+      return true;
+    }
+  });
+}
+
+function openRosterForm(employee = null) {
+  const actor = currentActor();
+  const editing = Boolean(employee);
+  if (editing && !canEditRosterMember(employee)) return;
+  const permittedRoles = isSetupMode()
+    ? ORG_ROLES
+    : ORG_ROLES.filter(role => roleRank(role) < roleRank(actor?.rosterRole));
+  if (editing && !permittedRoles.includes(employee.rosterRole)) permittedRoles.unshift(employee.rosterRole);
+  const managers = activeEmployees().filter(candidate => candidate.id !== employee?.id);
+  openForm({
+    eyebrow: 'Department roster',
+    title: editing ? `Edit ${employee.name}` : 'Add roster member',
+    fields: [
+      field('name', 'Name', 'text', employee?.name || '', null, true),
+      field('rosterRole', 'Hierarchy role', 'select', employee?.rosterRole || permittedRoles[0] || 'Estimator', permittedRoles),
+      field('managerId', 'Reports to', 'select', employee?.managerId || actor?.id || '', [['', 'No manager'], ...managers.map(manager => [manager.id, `${manager.name} · ${manager.rosterRole}`])]),
+      field('district', 'Primary group', 'select', employee?.district || actor?.district || 'Electrical', DISTRICTS),
+      field('weeklyBudget', 'Weekly capacity', 'number', employee?.weeklyBudget ?? 40, null, true),
+      field('title', 'Job title', 'text', employee?.title || ''),
+      field('email', 'Email', 'email', employee?.email || ''),
+      field('phone', 'Phone', 'text', employee?.phone || ''),
+      field('active', 'Active roster member', 'checkbox', employee?.active !== false)
+    ],
+    onSave: values => {
+      values.weeklyBudget = Number(values.weeklyBudget);
+      if (!values.name.trim() || !Number.isFinite(values.weeklyBudget) || values.weeklyBudget <= 0) {
+        showToast('Enter a name and weekly capacity greater than zero.');
+        return false;
+      }
+      if (values.rosterRole === 'DM') values.managerId = '';
+      const manager = employeeById(values.managerId);
+      if (manager && roleRank(manager.rosterRole) <= roleRank(values.rosterRole)) {
+        showToast('A roster member must report to a higher hierarchy role.');
+        return false;
+      }
+      if (employee && values.managerId && getEmployeeDescendantIds(employee.id).has(values.managerId)) {
+        showToast('That reporting line would create a hierarchy cycle.');
+        return false;
+      }
+      if (editing) {
+        Object.assign(employee, values);
+        commit('Roster', `${employee.name}'s roster placement updated.`, 'employee', employee.id);
+      } else {
+        const created = {
+          id: uuid(),
+          ...values,
+          collapsed: false,
+          archivedAt: '',
+          hireDate: '',
+          skills: [],
+          managerNotes: ''
+        };
+        data.employees.push(created);
+        if (!data.currentUserId && created.rosterRole === 'DM') data.currentUserId = created.id;
+        commit('Roster', `${created.name} added to the department roster.`, 'employee', created.id);
       }
       return true;
     }
@@ -676,6 +1045,10 @@ function updateLeaveStatus(entry, status) {
 }
 
 function deleteTask(task) {
+  if (!canManageTask(task)) {
+    showToast('Your roster role cannot delete this action item.');
+    return;
+  }
   if (!window.confirm(`Delete action item "${task.title}"?`)) return;
   data.tasks = data.tasks.filter(candidate => candidate.id !== task.id);
   commit('Task', `${task.title} deleted.`, 'task', task.id);
@@ -814,6 +1187,103 @@ function projectById(id) {
 
 function activeEmployees() {
   return data.employees.filter(employee => employee.active !== false);
+}
+
+function currentActor() {
+  return activeEmployees().find(employee => employee.id === data.currentUserId) || null;
+}
+
+function isSetupMode() {
+  return !data.employees.some(employee => employee.active !== false && employee.rosterRole === 'DM');
+}
+
+function roleRank(role) {
+  return { DM: 4, ADM: 3, Lead: 2, Estimator: 1 }[role] || 0;
+}
+
+function canCreateActionItems() {
+  return isSetupMode() || Boolean(currentActor() && currentActor().rosterRole !== 'Estimator');
+}
+
+function canManageTask(task) {
+  return isSetupMode() || canManageActionItem(currentActor()?.id, task);
+}
+
+function manageableProjects() {
+  if (isSetupMode()) return [...data.jobs];
+  const actor = currentActor();
+  if (!actor) return [];
+  return data.jobs.filter(project => canManageActionItem(actor.id, { projectId: project.id }));
+}
+
+function delegatableEmployees() {
+  const actor = currentActor();
+  if (!actor) return [];
+  const ids = new Set([actor.id, ...getEmployeeDescendantIds(actor.id)]);
+  return activeEmployees().filter(employee => ids.has(employee.id));
+}
+
+function eligibleAssignees(task) {
+  if (isSetupMode()) return activeEmployees();
+  const actor = currentActor();
+  return actor
+    ? delegatableEmployees().filter(employee => canAssignActionItem(actor.id, employee.id, task))
+    : [];
+}
+
+function assignTask(task, employeeId) {
+  const actor = currentActor();
+  if (!isSetupMode() && !canAssignActionItem(actor?.id, employeeId, task)) {
+    showToast('You can only assign this action to yourself or someone below you.');
+    return;
+  }
+  const employee = employeeById(employeeId);
+  if (!employee) return;
+  task.assigneeId = employee.id;
+  task.assignedById = actor?.id || '';
+  if (task.status === 'To do') task.status = 'In progress';
+  task.updatedAt = new Date().toISOString();
+  commit('Action assignment', `${task.title} assigned to ${employee.name} at ${task.progress}% complete.`, 'task', task.id);
+  renderWorkspace();
+}
+
+function releaseTask(task, managerAction = false) {
+  const actor = currentActor();
+  if (!isSetupMode() && !canManageTask(task) && !canWorkActionItem(actor?.id, task)) {
+    showToast('You cannot release this action item.');
+    return;
+  }
+  const previous = employeeById(task.assigneeId);
+  task.assigneeId = '';
+  task.assignedById = '';
+  if (task.progress < 100 && task.status !== 'Blocked') task.status = 'To do';
+  task.updatedAt = new Date().toISOString();
+  commit('Action handoff', `${previous?.name || 'The assignee'} released ${task.title} at ${task.progress}% complete${managerAction ? ' by management' : ''}.`, 'task', task.id);
+  renderWorkspace();
+}
+
+function taskFromDrag(event) {
+  const id = draggedActionItemId
+    || event.dataTransfer?.getData('application/x-action-item')
+    || event.dataTransfer?.getData('text/plain');
+  return data.tasks.find(task => task.id === id);
+}
+
+function canAddRosterMember() {
+  const actor = currentActor();
+  return isSetupMode() || Boolean(actor && actor.rosterRole !== 'Estimator');
+}
+
+function canEditRosterMember(employee) {
+  if (isSetupMode()) return true;
+  const actor = currentActor();
+  if (!actor) return false;
+  if (actor.id === employee.id) return actor.rosterRole === 'DM';
+  return actor.rosterRole === 'DM' || getEmployeeDescendantIds(actor.id).has(employee.id);
+}
+
+function rosterComparator(left, right) {
+  return roleRank(right.rosterRole) - roleRank(left.rosterRole) || left.name.localeCompare(right.name);
 }
 
 function totalProjectHours(projectId) {

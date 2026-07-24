@@ -115,6 +115,8 @@ export function addEmployee(name, weeklyBudget, district) {
     name: normalizedName,
     weeklyBudget: budget,
     district: DISTRICTS.includes(district) ? district : DEFAULT_DISTRICT,
+    rosterRole: 'Estimator',
+    managerId: '',
     collapsed: false,
     active: true,
     title: '',

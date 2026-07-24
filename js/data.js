@@ -1,6 +1,7 @@
 export const DEFAULT_COLOR = '#3b82f6';
 export const DEFAULT_DISTRICT = 'Electrical';
-export const DISTRICTS = ['Electrical', 'Instrumentation', 'Flex'];
+export const DISTRICTS = ['Electrical', 'Instrumentation', 'E&I'];
+export const ORG_ROLES = ['DM', 'ADM', 'Lead', 'Estimator'];
 export const JOB_STATUSES = ['Active', 'Upcoming', 'Complete', 'Other'];
 export const JOB_CLASSES = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5'];
 export const SUBTASK_CATEGORIES = ['Electrical', 'Instrumentation', 'Other'];
@@ -18,7 +19,7 @@ export const COLOR_PALETTE = [
 
 const STORAGE_KEY = 'planner-data-v2';
 const LEGACY_STORAGE_KEY = 'planner-data-v1';
-const SNAPSHOT_VERSION = 3;
+const SNAPSHOT_VERSION = 4;
 const WEEK_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -65,6 +66,7 @@ export const data = {
   goals: [],
   oneOnOnes: [],
   activity: [],
+  currentUserId: '',
   currentWeekStart: startOfWeek(new Date())
 };
 
@@ -226,7 +228,8 @@ export function recordActivity(type, message, entityType = '', entityId = '') {
     type: String(type || 'Update'),
     message: String(message || '').trim(),
     entityType,
-    entityId
+    entityId,
+    actorId: data.currentUserId || ''
   });
   data.activity = data.activity.slice(0, 500);
 }
@@ -255,7 +258,7 @@ export function removeEmployeeFromAssignments(employeeId) {
 
 export function deepCopySubtasksTemplate(job, district) {
   return (job.subtasks || [])
-    .filter(subtask => district === 'Flex' || subtask.category === district)
+    .filter(subtask => district === 'E&I' || subtask.category === district)
     .map(subtask => ({
       sourceId: subtask.id || null,
       name: subtask.name,
@@ -280,6 +283,56 @@ export function ensureAssignment(weekKey, employeeId, jobId) {
     };
   }
   return employeeAssignments[jobId];
+}
+
+export function getTaskActualHours(task) {
+  return (task?.workLogs || []).reduce((total, log) => total + toNonNegativeNumber(log.hours), 0);
+}
+
+export function getTaskVariance(task) {
+  return toNonNegativeNumber(task?.budgetHours) - getTaskActualHours(task);
+}
+
+export function getEmployeeDescendantIds(employeeId) {
+  const descendants = new Set();
+  const visit = managerId => {
+    data.employees
+      .filter(employee => employee.active !== false && employee.managerId === managerId)
+      .forEach(employee => {
+        if (descendants.has(employee.id)) return;
+        descendants.add(employee.id);
+        visit(employee.id);
+      });
+  };
+  visit(employeeId);
+  return descendants;
+}
+
+export function isEmployeeBelow(managerId, employeeId) {
+  return getEmployeeDescendantIds(managerId).has(employeeId);
+}
+
+export function canManageActionItem(actorId, task) {
+  const actor = data.employees.find(employee => employee.id === actorId && employee.active !== false);
+  if (!actor || actor.rosterRole === 'Estimator') return false;
+  if (actor.rosterRole === 'DM') return true;
+  const project = data.jobs.find(job => job.id === task?.projectId);
+  if (!project && actor.rosterRole === 'Lead') return false;
+  const scopeOwnerId = project?.ownerId || task?.scopeOwnerId || '';
+  if (!scopeOwnerId) return false;
+  return scopeOwnerId === actor.id || isEmployeeBelow(actor.id, scopeOwnerId);
+}
+
+export function canAssignActionItem(actorId, targetEmployeeId, task) {
+  const actor = data.employees.find(employee => employee.id === actorId && employee.active !== false);
+  const target = data.employees.find(employee => employee.id === targetEmployeeId && employee.active !== false);
+  if (!actor || !target) return false;
+  if (actor.id === target.id) return !task.assigneeId || task.assigneeId === actor.id;
+  return canManageActionItem(actorId, task) && isEmployeeBelow(actor.id, target.id);
+}
+
+export function canWorkActionItem(actorId, task) {
+  return Boolean(actorId && task?.assigneeId === actorId);
 }
 
 export function copyWeekAssignments(sourceWeekKey, targetWeekKey) {
@@ -312,6 +365,7 @@ export function createSnapshot() {
     goals: structuredCloneSafe(data.goals),
     oneOnOnes: structuredCloneSafe(data.oneOnOnes),
     activity: structuredCloneSafe(data.activity),
+    currentUserId: data.currentUserId,
     currentWeekStart: data.currentWeekStart.toISOString()
   };
 }
@@ -327,6 +381,7 @@ export function replaceData(snapshot) {
   data.goals = normalized.goals;
   data.oneOnOnes = normalized.oneOnOnes;
   data.activity = normalized.activity;
+  data.currentUserId = normalized.currentUserId;
   data.currentWeekStart = normalized.currentWeekStart;
 }
 
@@ -401,6 +456,14 @@ function normalizeSnapshot(snapshot) {
   const employees = snapshot.employees.map(normalizeEmployee);
   assertUniqueIds(employees, 'employee');
   const employeeIds = new Set(employees.map(employee => employee.id));
+  const employeesById = new Map(employees.map(employee => [employee.id, employee]));
+  const roleRank = { DM: 4, ADM: 3, Lead: 2, Estimator: 1 };
+  employees.forEach(employee => {
+    const manager = employeesById.get(employee.managerId);
+    if (!manager || manager.id === employee.id
+      || roleRank[manager.rosterRole] <= roleRank[employee.rosterRole]) employee.managerId = '';
+  });
+  removeRosterCycles(employees);
   const jobs = snapshot.jobs.map((job, index) => normalizeJob(job, index, employeeIds));
   assertUniqueIds(jobs, 'job');
 
@@ -455,6 +518,8 @@ function normalizeSnapshot(snapshot) {
     goals,
     oneOnOnes,
     activity,
+    currentUserId: employeesById.get(snapshot.currentUserId)?.active !== false
+      && employeeIds.has(snapshot.currentUserId) ? snapshot.currentUserId : '',
     currentWeekStart: startOfWeek(parsedDate)
   };
 }
@@ -472,7 +537,13 @@ function normalizeEmployee(employee, index) {
     id: normalizeId(employee.id, `employee-${index + 1}`),
     name,
     weeklyBudget: budget,
-    district: DISTRICTS.includes(employee.district) ? employee.district : DEFAULT_DISTRICT,
+    district: employee.district === 'Flex'
+      ? 'E&I'
+      : DISTRICTS.includes(employee.district) ? employee.district : DEFAULT_DISTRICT,
+    rosterRole: ORG_ROLES.includes(employee.rosterRole)
+      ? employee.rosterRole
+      : ORG_ROLES.includes(employee.title) ? employee.title : 'Estimator',
+    managerId: typeof employee.managerId === 'string' ? employee.managerId : '',
     collapsed: Boolean(employee.collapsed),
     active: employee.active !== false,
     archivedAt: normalizeDate(employee.archivedAt),
@@ -553,7 +624,43 @@ function normalizeTask(task, employeeIds, jobIds) {
     priority: PRIORITIES.includes(task.priority) ? task.priority : 'Medium',
     dueDate: normalizeDate(task.dueDate),
     description: String(task.description || '').trim(),
-    createdAt: normalizeTimestamp(task.createdAt)
+    budgetHours: toNonNegativeNumber(task.budgetHours),
+    wbs: String(task.wbs || '').trim(),
+    io: String(task.io || '').trim(),
+    progress: Math.min(100, Math.max(0, Number(task.progress) || (task.status === 'Done' ? 100 : 0))),
+    scopeOwnerId: typeof task.scopeOwnerId === 'string' && employeeIds.has(task.scopeOwnerId)
+      ? task.scopeOwnerId
+      : '',
+    assignedById: typeof task.assignedById === 'string' && employeeIds.has(task.assignedById)
+      ? task.assignedById
+      : '',
+    workLogs: normalizeArray(task.workLogs, log => normalizeTaskWorkLog(log, employeeIds)),
+    notes: normalizeArray(task.notes, note => normalizeTaskNote(note, employeeIds)),
+    createdAt: normalizeTimestamp(task.createdAt),
+    updatedAt: normalizeTimestamp(task.updatedAt || task.createdAt)
+  };
+}
+
+function normalizeTaskWorkLog(log, employeeIds) {
+  if (!log || typeof log !== 'object' || !employeeIds.has(log.employeeId)) return null;
+  return {
+    id: normalizeId(log.id, `work-log-${uuid()}`),
+    employeeId: log.employeeId,
+    hours: toNonNegativeNumber(log.hours),
+    createdAt: normalizeTimestamp(log.createdAt)
+  };
+}
+
+function normalizeTaskNote(note, employeeIds) {
+  if (!note || typeof note !== 'object') return null;
+  const text = String(note.text || '').trim();
+  if (!text) return null;
+  return {
+    id: normalizeId(note.id, `task-note-${uuid()}`),
+    employeeId: employeeIds.has(note.employeeId) ? note.employeeId : '',
+    text,
+    progress: Math.min(100, Math.max(0, Number(note.progress) || 0)),
+    createdAt: normalizeTimestamp(note.createdAt)
   };
 }
 
@@ -629,8 +736,26 @@ function normalizeActivity(entry) {
     type: String(entry.type || 'Update'),
     message,
     entityType: String(entry.entityType || ''),
-    entityId: String(entry.entityId || '')
+    entityId: String(entry.entityId || ''),
+    actorId: String(entry.actorId || '')
   };
+}
+
+function removeRosterCycles(employees) {
+  const byId = new Map(employees.map(employee => [employee.id, employee]));
+  employees.forEach(employee => {
+    const visited = new Set([employee.id]);
+    let current = employee;
+    while (current.managerId) {
+      if (visited.has(current.managerId)) {
+        employee.managerId = '';
+        break;
+      }
+      visited.add(current.managerId);
+      current = byId.get(current.managerId);
+      if (!current) break;
+    }
+  });
 }
 
 function normalizeArray(value, normalizer) {
