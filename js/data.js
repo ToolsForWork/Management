@@ -1,7 +1,7 @@
 export const DEFAULT_COLOR = '#3b82f6';
 export const DEFAULT_DISTRICT = 'Electrical';
 export const DISTRICTS = ['Electrical', 'Instrumentation', 'E&I'];
-export const ORG_ROLES = ['DM', 'ADM', 'Lead', 'Estimator'];
+export const ORG_ROLES = ['DM', 'ADM', 'Estimator'];
 export const JOB_STATUSES = ['Active', 'Upcoming', 'Complete', 'Other'];
 export const JOB_CLASSES = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5'];
 export const SUBTASK_CATEGORIES = ['Electrical', 'Instrumentation', 'Other'];
@@ -9,6 +9,58 @@ export const PRIORITIES = ['Low', 'Medium', 'High', 'Critical'];
 export const TASK_STATUSES = ['To do', 'In progress', 'Blocked', 'Done'];
 export const PROJECT_HEALTH = ['On track', 'At risk', 'Off track', 'Complete'];
 export const ASSIGNMENT_STATUSES = ['Proposed', 'Accepted', 'Needs change', 'Complete'];
+export const DEFAULT_WBS = '110803';
+export const DEFAULT_IO = {
+  Electrical: '1507',
+  Instrumentation: '1509',
+  'E&I': '1507',
+  Unutilized: '1511'
+};
+
+// Top-level "Estimating - E&I" activities from the supplied 2025 schedule workbook.
+export const PROCEDURE_ACTIVITIES = [
+  'Early Engagement',
+  'Procurement Strategy',
+  'Preliminary MTO Development - 1E Quantification',
+  'Preliminary MTO Development - Validation of Engineering Quantities',
+  'PARTNER Engineering - Preliminary MTO Development - 1E Quantification',
+  'PARTNER Engineering - Preliminary MTO Development - Validation of Engineering Quantities',
+  'Prelim NTO - Engineering Development Allowances',
+  'Prelim Estimate - Construction Power',
+  'Issue Initial Procurement Packages - Subs',
+  'Issue Initial Procurement Packages - PM',
+  'Final MTO Development - 1E Quantification',
+  'Final MTO Development - Validation of Engineering Quantities',
+  'Engineering PARTNER Final MTOs Development - 1E Quantification',
+  'Engineering PARTNER Final MTOs Development - Validation of Engineering Quantities',
+  'Final NTO - Engineering Development Allowances',
+  'Final Estimate - Construction Power',
+  'Estimate Development',
+  'Final Procurement Packages - Subs',
+  'Final Procurement Packages - PM',
+  'QCS Subs',
+  'QCS PM',
+  'DDM Review / Actions',
+  'Finalize Assumptions and Clarifications into Log',
+  'Prepare for CER Review',
+  'Prepare for EPC/DM Review',
+  'Prepare for Executive Review',
+  'Incorporate Comments from Executive Review',
+  'Final Documents to SharePoint and Final Turnover Book'
+];
+
+export const DEFAULT_TAKEOFFS = {
+  Electrical: [
+    'Grounding',
+    'Lighting',
+    'Lightning Protection',
+    'Raceway and Cable',
+    'Heat Trace',
+    'Equipment and Devices',
+    'Temporary Power'
+  ],
+  Instrumentation: ['Network', 'Instrumentation', 'Telecommunications']
+};
 
 export const COLOR_PALETTE = [
   '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
@@ -19,7 +71,7 @@ export const COLOR_PALETTE = [
 
 const STORAGE_KEY = 'planner-data-v2';
 const LEGACY_STORAGE_KEY = 'planner-data-v1';
-const SNAPSHOT_VERSION = 4;
+const SNAPSHOT_VERSION = 5;
 const WEEK_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 const BLOCKED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -146,6 +198,18 @@ export function getAlerts(referenceDate = new Date()) {
         entityType: 'employee',
         entityId: employee.id
       });
+    }
+    if (employee.rosterRole === 'Estimator') {
+      const planned = getThreeWeekPlannedHours(employee.id, weekKey);
+      if (planned < 120) {
+        alerts.push({
+          severity: planned < 80 ? 'High' : 'Medium',
+          type: '3-week plan',
+          message: `${employee.name} has ${planned} of 120 future hours planned.`,
+          entityType: 'employee',
+          entityId: employee.id
+        });
+      }
     }
   });
 
@@ -293,6 +357,52 @@ export function getTaskVariance(task) {
   return toNonNegativeNumber(task?.budgetHours) - getTaskActualHours(task);
 }
 
+export function createDefaultProjectChecklist() {
+  return [
+    ...PROCEDURE_ACTIVITIES.map(name => ({
+      id: uuid(),
+      name,
+      type: 'Procedure',
+      discipline: 'E&I',
+      complete: false,
+      completedAt: '',
+      completedById: ''
+    })),
+    ...Object.entries(DEFAULT_TAKEOFFS).flatMap(([discipline, names]) => names.map(name => ({
+      id: uuid(),
+      name,
+      type: 'Takeoff',
+      discipline,
+      complete: false,
+      completedAt: '',
+      completedById: ''
+    })))
+  ];
+}
+
+export function getViewerLevel(employeeId) {
+  const employee = data.employees.find(candidate => candidate.id === employeeId && candidate.active !== false);
+  if (!employee) return 'Estimator';
+  if (employee.rosterRole === 'DM' || employee.rosterRole === 'ADM') return 'Manager';
+  return data.jobs.some(job => job.ownerId === employee.id && job.category !== 'Complete')
+    ? 'Lead'
+    : 'Estimator';
+}
+
+export function getThreeWeekPlannedHours(employeeId, startWeekKey = getCurrentWeekKey()) {
+  const start = startOfWeek(new Date(`${startWeekKey}T12:00:00`));
+  const end = new Date(start);
+  end.setDate(end.getDate() + 20);
+  const endKey = formatDate(end);
+  return data.tasks
+    .filter(task => task.assigneeId === employeeId && task.progress < 100)
+    .filter(task => {
+      const plannedWeek = task.plannedWeekKey || startWeekKey;
+      return plannedWeek >= startWeekKey && plannedWeek <= endKey;
+    })
+    .reduce((total, task) => total + Math.max(0, toNonNegativeNumber(task.budgetHours) - getTaskActualHours(task)), 0);
+}
+
 export function getEmployeeDescendantIds(employeeId) {
   const descendants = new Set();
   const visit = managerId => {
@@ -314,10 +424,10 @@ export function isEmployeeBelow(managerId, employeeId) {
 
 export function canManageActionItem(actorId, task) {
   const actor = data.employees.find(employee => employee.id === actorId && employee.active !== false);
-  if (!actor || actor.rosterRole === 'Estimator') return false;
+  if (!actor) return false;
   if (actor.rosterRole === 'DM') return true;
   const project = data.jobs.find(job => job.id === task?.projectId);
-  if (!project && actor.rosterRole === 'Lead') return false;
+  if (actor.rosterRole === 'Estimator') return Boolean(project && project.ownerId === actor.id);
   const scopeOwnerId = project?.ownerId || task?.scopeOwnerId || '';
   if (!scopeOwnerId) return false;
   return scopeOwnerId === actor.id || isEmployeeBelow(actor.id, scopeOwnerId);
@@ -328,7 +438,15 @@ export function canAssignActionItem(actorId, targetEmployeeId, task) {
   const target = data.employees.find(employee => employee.id === targetEmployeeId && employee.active !== false);
   if (!actor || !target) return false;
   if (actor.id === target.id) return !task.assigneeId || task.assigneeId === actor.id;
-  return canManageActionItem(actorId, task) && isEmployeeBelow(actor.id, target.id);
+  if (!canManageActionItem(actorId, task)) return false;
+  if (actor.rosterRole === 'Estimator') {
+    const project = data.jobs.find(job => job.id === task.projectId);
+    return Boolean(project?.ownerId === actor.id
+      && target.rosterRole === 'Estimator'
+      && target.managerId
+      && target.managerId === actor.managerId);
+  }
+  return isEmployeeBelow(actor.id, target.id);
 }
 
 export function canWorkActionItem(actorId, task) {
@@ -453,12 +571,18 @@ function normalizeSnapshot(snapshot) {
     throw new Error('The imported file must include week assignments.');
   }
 
+  const legacyLeadManagers = new Map(snapshot.employees
+    .filter(employee => employee?.rosterRole === 'Lead')
+    .map(employee => [employee.id, employee.managerId || '']));
   const employees = snapshot.employees.map(normalizeEmployee);
   assertUniqueIds(employees, 'employee');
   const employeeIds = new Set(employees.map(employee => employee.id));
   const employeesById = new Map(employees.map(employee => [employee.id, employee]));
-  const roleRank = { DM: 4, ADM: 3, Lead: 2, Estimator: 1 };
+  const roleRank = { DM: 3, ADM: 2, Estimator: 1 };
   employees.forEach(employee => {
+    if (legacyLeadManagers.has(employee.managerId)) {
+      employee.managerId = legacyLeadManagers.get(employee.managerId) || '';
+    }
     const manager = employeesById.get(employee.managerId);
     if (!manager || manager.id === employee.id
       || roleRank[manager.rosterRole] <= roleRank[employee.rosterRole]) employee.managerId = '';
@@ -540,8 +664,10 @@ function normalizeEmployee(employee, index) {
     district: employee.district === 'Flex'
       ? 'E&I'
       : DISTRICTS.includes(employee.district) ? employee.district : DEFAULT_DISTRICT,
-    rosterRole: ORG_ROLES.includes(employee.rosterRole)
-      ? employee.rosterRole
+    rosterRole: employee.rosterRole === 'Lead'
+      ? 'Estimator'
+      : ORG_ROLES.includes(employee.rosterRole)
+        ? employee.rosterRole
       : ORG_ROLES.includes(employee.title) ? employee.title : 'Estimator',
     managerId: typeof employee.managerId === 'string' ? employee.managerId : '',
     collapsed: Boolean(employee.collapsed),
@@ -576,6 +702,10 @@ function normalizeJob(job, index, employeeIds) {
     subtaskGroupCollapsed: normalizeCollapsedGroups(job.subtaskGroupCollapsed),
     hoursBudget: toNonNegativeNumber(job.hoursBudget),
     ownerId: typeof job.ownerId === 'string' && employeeIds.has(job.ownerId) ? job.ownerId : '',
+    discipline: DISTRICTS.includes(job.discipline) ? job.discipline : DEFAULT_DISTRICT,
+    checklist: Array.isArray(job.checklist) && job.checklist.length
+      ? job.checklist.map(item => normalizeChecklistItem(item, employeeIds)).filter(Boolean)
+      : createDefaultProjectChecklist(),
     priority: PRIORITIES.includes(job.priority) ? job.priority : 'Medium',
     health: PROJECT_HEALTH.includes(job.health) ? job.health : (job.category === 'Complete' ? 'Complete' : 'On track'),
     startDate: normalizeDate(job.startDate),
@@ -593,6 +723,21 @@ function normalizeJobSubtask(subtask, index) {
     name: normalizeRequiredText(subtask.name, `Job subtask ${index + 1} needs a name.`),
     category: SUBTASK_CATEGORIES.includes(subtask.category) ? subtask.category : 'Other',
     color: normalizeColor(subtask.color, DEFAULT_COLOR)
+  };
+}
+
+function normalizeChecklistItem(item, employeeIds) {
+  if (!item || typeof item !== 'object') return null;
+  const name = String(item.name || '').trim();
+  if (!name) return null;
+  return {
+    id: normalizeId(item.id, `checklist-${uuid()}`),
+    name,
+    type: item.type === 'Takeoff' ? 'Takeoff' : 'Procedure',
+    discipline: DISTRICTS.includes(item.discipline) ? item.discipline : 'E&I',
+    complete: Boolean(item.complete),
+    completedAt: normalizeTimestampOrEmpty(item.completedAt),
+    completedById: employeeIds.has(item.completedById) ? item.completedById : ''
   };
 }
 
@@ -627,6 +772,12 @@ function normalizeTask(task, employeeIds, jobIds) {
     budgetHours: toNonNegativeNumber(task.budgetHours),
     wbs: String(task.wbs || '').trim(),
     io: String(task.io || '').trim(),
+    workGroup: ['Electrical', 'Instrumentation'].includes(task.workGroup)
+      ? task.workGroup
+      : 'Electrical',
+    plannedWeekKey: WEEK_KEY_PATTERN.test(task.plannedWeekKey || '')
+      ? task.plannedWeekKey
+      : '',
     progress: Math.min(100, Math.max(0, Number(task.progress) || (task.status === 'Done' ? 100 : 0))),
     scopeOwnerId: typeof task.scopeOwnerId === 'string' && employeeIds.has(task.scopeOwnerId)
       ? task.scopeOwnerId
@@ -773,6 +924,12 @@ function normalizeDate(value) {
 function normalizeTimestamp(value) {
   const date = value ? new Date(value) : new Date();
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+}
+
+function normalizeTimestampOrEmpty(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
 }
 
 function normalizeCollapsedGroups(groups) {

@@ -2,7 +2,9 @@ import {
   data,
   uuid,
   getCurrentWeekKey,
+  getWeekKey,
   totalHoursAllEmployees,
+  totalHoursForEmployeeWeek,
   totalEmployeeCapacity,
   getAlerts,
   getEffectiveEmployeeCapacity,
@@ -18,14 +20,20 @@ import {
   canWorkActionItem,
   getEmployeeDescendantIds,
   getTaskActualHours,
-  getTaskVariance
+  getTaskVariance,
+  getViewerLevel,
+  getThreeWeekPlannedHours,
+  DEFAULT_WBS,
+  DEFAULT_IO
 } from './data.js';
 import { showToast, renderJobs, renderEmployees } from './ui.js';
 import { forceChartUpdate } from './charts.js';
+import { getVerifiedIdentity } from './auth.js';
 
 let activeTab = 'overview';
 let dialogSubmit = null;
 let draggedActionItemId = '';
+const PTO_URL = 'https://rp.kiewit.com/#/';
 
 export function initializeWorkspace() {
   document.getElementById('workspaceBtn').addEventListener('click', openWorkspace);
@@ -37,6 +45,7 @@ export function initializeWorkspace() {
     renderWorkspace();
   });
   document.getElementById('workspaceIdentitySelect').addEventListener('change', event => {
+    if (getVerifiedIdentity()) return;
     data.currentUserId = event.target.value;
     scheduleSave();
     renderWorkspace();
@@ -69,7 +78,10 @@ export function refreshWorkspaceSummary() {
 export function renderWorkspace() {
   refreshWorkspaceSummary();
   refreshIdentitySelector();
+  const allowedTabs = permittedTabs();
+  if (!allowedTabs.includes(activeTab)) activeTab = allowedTabs[0];
   document.querySelectorAll('[data-workspace-tab]').forEach(button => {
+    button.hidden = !allowedTabs.includes(button.dataset.workspaceTab);
     const selected = button.dataset.workspaceTab === activeTab;
     button.classList.toggle('active', selected);
     button.setAttribute('aria-current', selected ? 'page' : 'false');
@@ -91,7 +103,15 @@ export function renderWorkspace() {
 function refreshIdentitySelector() {
   const select = document.getElementById('workspaceIdentitySelect');
   const help = document.getElementById('workspaceIdentityHelp');
+  const identityLink = document.getElementById('microsoftIdentityLink');
   const setup = isSetupMode();
+  const verified = getVerifiedIdentity();
+  const azureHosted = location.hostname.endsWith('.azurestaticapps.net');
+  identityLink.classList.toggle('hidden', !azureHosted);
+  identityLink.textContent = verified ? 'Sign out' : 'Sign in with Microsoft';
+  identityLink.href = verified
+    ? '/.auth/logout?post_logout_redirect_uri=/main.html'
+    : '/.auth/login/aad?post_login_redirect_uri=/main.html';
   select.replaceChildren();
   if (setup) {
     const option = new Option('Roster setup · Full access', '');
@@ -102,12 +122,24 @@ function refreshIdentitySelector() {
   select.appendChild(new Option('Select your roster identity…', ''));
   activeEmployees()
     .sort((left, right) => roleRank(right.rosterRole) - roleRank(left.rosterRole) || left.name.localeCompare(right.name))
-    .forEach(employee => select.appendChild(new Option(`${employee.name} · ${employee.rosterRole}`, employee.id)));
+    .forEach(employee => select.appendChild(new Option(`${employee.name} · ${getViewerLevel(employee.id)}`, employee.id)));
   select.value = data.currentUserId;
+  select.disabled = Boolean(verified);
   const actor = currentActor();
-  help.textContent = actor
-    ? `${actor.rosterRole} permissions apply.`
+  help.textContent = verified
+    ? verified.employeeId
+      ? `Verified as ${verified.name || verified.email} through ${verified.source}.`
+      : `Verified ${verified.email || verified.name}, but no matching roster email was found.`
+    : actor
+    ? `${getViewerLevel(actor.id)} view · local identity selection.`
     : 'Select your identity to enable permitted actions.';
+}
+
+function permittedTabs() {
+  if (isSetupMode()) return ['overview', 'projects', 'tasks', 'people', 'roster', 'activity'];
+  const actor = currentActor();
+  if (!actor || getViewerLevel(actor.id) !== 'Manager') return ['overview', 'tasks'];
+  return ['overview', 'projects', 'tasks', 'people', 'roster', 'activity'];
 }
 
 function openWorkspace() {
@@ -130,6 +162,9 @@ function closeWorkspace() {
 }
 
 function renderOverview() {
+  const actor = currentActor();
+  const level = actor ? getViewerLevel(actor.id) : 'Manager';
+  if (actor && level !== 'Manager') return renderWorkerOverview(actor, level);
   const wrapper = element('div', 'workspace-view');
   wrapper.append(viewHeading('Operational overview', 'What needs attention across the current week.'));
 
@@ -161,6 +196,57 @@ function renderOverview() {
   );
   wrapper.appendChild(grid);
   return wrapper;
+}
+
+function renderWorkerOverview(actor, level) {
+  const wrapper = element('div', 'workspace-view');
+  const heading = viewHeading(
+    level === 'Lead' ? 'Lead work plan' : 'My work plan',
+    'Keep the next three weeks loaded and move available actions into the plan.'
+  );
+  heading.appendChild(actionButton('Request PTO / Leave', () => window.open(PTO_URL, '_blank', 'noopener,noreferrer'), 'secondary-button'));
+  wrapper.append(heading);
+  const planned = getThreeWeekPlannedHours(actor.id);
+  const currentHours = totalHoursForEmployeeWeek(getCurrentWeekKey(), actor.id);
+  const assigned = data.tasks.filter(task => task.assigneeId === actor.id && task.progress < 100);
+  const available = data.tasks.filter(task => !task.assigneeId && task.progress < 100);
+  const metrics = element('div', 'metric-grid');
+  metrics.append(
+    metricCard('3-week plan', `${formatHours(planned)}h`, `${formatHours(Math.max(0, 120 - planned))}h still needed`),
+    metricCard('This week', `${formatHours(currentHours)}h`, 'Project allocation'),
+    metricCard('My active actions', assigned.length, `${assigned.filter(task => task.status === 'Blocked').length} blocked`),
+    metricCard('Available actions', available.length, 'Ready to self-assign')
+  );
+  wrapper.append(metrics, planProgress(planned));
+  if (level === 'Lead') {
+    wrapper.appendChild(dashboardPanel('Group planning coverage', renderHoursSummary(), 'View actions', () => switchTab('tasks')));
+  } else {
+    wrapper.appendChild(dashboardPanel('My next actions', renderCompactTasks(actor.id), 'View action list', () => switchTab('tasks')));
+  }
+  return wrapper;
+}
+
+function planProgress(planned) {
+  const panel = element('section', 'dashboard-panel plan-panel');
+  const heading = element('div', 'dashboard-panel-heading');
+  heading.append(
+    element('h3', '', '120-hour rolling target'),
+    chip(planned >= 120 ? 'Ready' : 'Needs planning', planned >= 120 ? 'chip-success' : 'chip-warning')
+  );
+  const track = element('div', 'progress-track');
+  const fill = element('div', 'progress-fill');
+  fill.style.width = `${Math.min(100, (planned / 120) * 100)}%`;
+  track.appendChild(fill);
+  panel.append(heading, track, element('span', 'plan-caption', `${formatHours(planned)} of 120 future hours allocated`));
+  return panel;
+}
+
+function renderCompactTasks(employeeId) {
+  const tasks = data.tasks.filter(task => task.assigneeId === employeeId && task.progress < 100).slice(0, 5);
+  if (!tasks.length) return emptyState('No active actions', 'Choose work from the available action list.');
+  const list = element('div', 'workspace-list');
+  tasks.forEach(task => list.appendChild(element('div', 'deadline-row', `${task.title} · ${task.progress}% · ${formatHours(task.budgetHours - getTaskActualHours(task))}h remaining`)));
+  return list;
 }
 
 function renderAlerts() {
@@ -254,12 +340,13 @@ function renderProjects() {
   const wrapper = element('div', 'workspace-view');
   wrapper.append(viewHeading('Project portfolio', 'Ownership, health, priority, dates, and delivery context.'));
 
-  if (!data.jobs.length) {
+  const projects = manageableProjects();
+  if (!projects.length) {
     wrapper.appendChild(emptyState('No projects yet', 'Create projects in the planner, then manage delivery details here.'));
     return wrapper;
   }
   const grid = element('div', 'portfolio-grid');
-  [...data.jobs]
+  [...projects]
     .sort((left, right) => projectSortKey(left).localeCompare(projectSortKey(right)))
     .forEach(project => grid.appendChild(projectCard(project)));
   wrapper.appendChild(grid);
@@ -276,7 +363,7 @@ function projectCard(project) {
   const actionVariance = completedActions.reduce((total, task) => total + getTaskVariance(task), 0);
   const heading = element('div', 'portfolio-card-heading');
   const title = element('div');
-  title.append(element('h3', '', project.name), element('span', '', owner ? `Owner: ${owner.name}` : 'Owner not assigned'));
+  title.append(element('h3', '', project.name), element('span', '', owner ? `Project lead: ${owner.name}` : 'Project lead not assigned'));
   heading.append(title, actionButton('Edit details', () => openProjectForm(project), 'secondary-button'));
   const chips = element('div', 'chip-row');
   chips.append(chip(project.health || 'On track', healthClass(project.health)), chip(project.priority || 'Medium', priorityClass(project.priority)));
@@ -293,6 +380,7 @@ function projectCard(project) {
   bar.appendChild(fill);
   progressBlock.append(progressLabel, bar);
   card.appendChild(progressBlock);
+  card.appendChild(projectChecklist(project));
 
   const footer = element('div', 'portfolio-card-footer');
   footer.append(
@@ -310,11 +398,39 @@ function projectCard(project) {
   return card;
 }
 
+function projectChecklist(project) {
+  const details = element('details', 'project-checklist');
+  const complete = project.checklist.filter(item => item.complete).length;
+  details.appendChild(element('summary', '', `Project checklist · ${complete}/${project.checklist.length}`));
+  ['Procedure', 'Takeoff'].forEach(type => {
+    const items = project.checklist.filter(item => item.type === type);
+    const group = element('div', 'checklist-group');
+    group.appendChild(element('strong', '', type === 'Procedure' ? 'Estimating – E&I activities' : 'Required takeoffs'));
+    items.forEach(item => {
+      const label = element('label', 'checklist-item');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = item.complete;
+      checkbox.addEventListener('change', () => {
+        item.complete = checkbox.checked;
+        item.completedAt = checkbox.checked ? new Date().toISOString() : '';
+        item.completedById = checkbox.checked ? currentActor()?.id || '' : '';
+        commit('Project checklist', `${item.name} marked ${checkbox.checked ? 'complete' : 'incomplete'} for ${project.name}.`, 'project', project.id);
+        renderWorkspace();
+      });
+      label.append(checkbox, element('span', '', `${item.name}${item.type === 'Takeoff' ? ` · ${item.discipline}` : ''}`));
+      group.appendChild(label);
+    });
+    details.appendChild(group);
+  });
+  return details;
+}
+
 function renderTasks() {
   const wrapper = element('div', 'workspace-view');
   const heading = viewHeading('Action item list', 'Project and unutilized work, with charging codes, budgets, progress, and handoffs.');
   if (canCreateActionItems()) heading.appendChild(actionButton('Add action', () => openTaskForm()));
-  wrapper.append(heading, renderAssignmentTargets());
+  wrapper.append(heading, renderHoursSummary(), renderAssignmentTargets());
 
   const controls = element('div', 'workspace-filters');
   const search = fieldControl('search', 'Search actions', '');
@@ -328,6 +444,7 @@ function renderTasks() {
     list.replaceChildren();
     const query = search.input.value.trim().toLowerCase();
     const tasks = data.tasks
+      .filter(task => isTaskVisibleToViewer(task))
       .filter(task => !query || [task.title, task.description, task.wbs, task.io].some(value => String(value || '').toLowerCase().includes(query)))
       .filter(task => !status.input.value || task.status === status.input.value)
       .filter(task => !owner.input.value || task.assigneeId === owner.input.value)
@@ -345,6 +462,48 @@ function renderTasks() {
   refresh();
   wrapper.appendChild(list);
   return wrapper;
+}
+
+function renderHoursSummary() {
+  const wrapper = element('section', 'hours-summary');
+  const employees = visibleHoursEmployees();
+  employees.forEach(employee => {
+    const planned = getThreeWeekPlannedHours(employee.id);
+    const card = element('article', 'hours-summary-card');
+    card.append(
+      element('strong', '', employee.name),
+      element('span', '', `${formatHours(totalHoursForEmployeeWeek(getCurrentWeekKey(), employee.id))}h this week`),
+      element('span', '', `${formatHours(planned)} / 120h planned`)
+    );
+    card.classList.toggle('under-planned', planned < 120);
+    wrapper.appendChild(card);
+  });
+  return wrapper;
+}
+
+function visibleHoursEmployees() {
+  const actor = currentActor();
+  if (!actor) return activeEmployees();
+  const level = getViewerLevel(actor.id);
+  if (level === 'Estimator') return [actor];
+  if (level === 'Lead') {
+    return activeEmployees().filter(employee =>
+      employee.id === actor.id
+      || (employee.rosterRole === 'Estimator' && employee.managerId === actor.managerId)
+    );
+  }
+  if (actor.rosterRole === 'DM') return activeEmployees();
+  const ids = getEmployeeDescendantIds(actor.id);
+  return activeEmployees().filter(employee => employee.id === actor.id || ids.has(employee.id));
+}
+
+function isTaskVisibleToViewer(task) {
+  const actor = currentActor();
+  if (!actor || isSetupMode()) return true;
+  const level = getViewerLevel(actor.id);
+  if (level === 'Manager') return actor.rosterRole === 'DM' || canManageActionItem(actor.id, task) || task.assigneeId === actor.id;
+  if (level === 'Lead') return !task.assigneeId || task.assigneeId === actor.id || canManageActionItem(actor.id, task);
+  return !task.assigneeId || task.assigneeId === actor.id;
 }
 
 function taskSection(title, tasks, groupByProject) {
@@ -384,8 +543,7 @@ function renderAssignmentTargets() {
     return wrapper;
   }
   const targets = element('div', 'task-assignment-targets');
-  const candidateIds = new Set([actor.id, ...getEmployeeDescendantIds(actor.id)]);
-  activeEmployees().filter(employee => candidateIds.has(employee.id)).forEach(employee => {
+  delegatableEmployees().forEach(employee => {
     const target = element('div', 'task-assignment-target');
     target.append(avatar(employee.name), element('span', '', employee.id === actor.id ? 'My queue' : employee.name));
     target.addEventListener('dragover', event => {
@@ -432,9 +590,11 @@ function taskRow(task) {
   const result = variance >= 0 ? `${formatHours(variance)}h gain` : `${formatHours(Math.abs(variance))}h loss`;
   main.append(top, element('span', '', [
     projectById(task.projectId)?.name || 'Unutilized',
+    task.workGroup,
     employeeById(task.assigneeId)?.name || 'Unassigned',
     `${formatHours(actual)} / ${formatHours(task.budgetHours)} budget hrs`,
-    task.progress >= 100 ? result : `${task.progress}% complete`
+    task.progress >= 100 ? result : `${task.progress}% complete`,
+    task.plannedWeekKey ? `Week of ${task.plannedWeekKey}` : 'Week not planned'
   ].join(' · ')));
   const codes = element('div', 'task-code-row');
   codes.append(
@@ -449,9 +609,15 @@ function taskRow(task) {
   main.appendChild(progressTrack);
   if (task.description) main.appendChild(element('p', '', task.description));
   if (task.notes?.length) {
-    const notes = element('div', 'task-note-preview');
-    task.notes.slice(-2).reverse().forEach(note => {
-      notes.appendChild(element('span', '', `${employeeById(note.employeeId)?.name || 'Team'} · ${note.progress}% — ${note.text}`));
+    const notes = element('details', 'task-note-preview');
+    notes.appendChild(element('summary', '', `Notes (${task.notes.length})`));
+    [...task.notes].reverse().forEach(note => {
+      const noteRow = element('div', 'task-note-row');
+      noteRow.appendChild(element('span', '', `${employeeById(note.employeeId)?.name || 'Team'} · ${note.progress}% — ${note.text}`));
+      if (canDeleteTaskNote(task, note)) {
+        noteRow.appendChild(iconButton('×', 'Remove task note', () => deleteTaskNote(task, note)));
+      }
+      notes.appendChild(noteRow);
     });
     main.appendChild(notes);
   }
@@ -488,8 +654,9 @@ function taskRow(task) {
 
 function renderRoster() {
   const wrapper = element('div', 'workspace-view');
-  const heading = viewHeading('Department roster', 'DM → ADM → Lead → Estimator reporting structure.');
+  const heading = viewHeading('Department roster', 'DM → ADM → Estimator reporting structure. Project leads are derived from project ownership.');
   if (canAddRosterMember()) heading.appendChild(actionButton('Add roster member', () => openRosterForm()));
+  heading.appendChild(actionButton('Roster CSV template', () => window.open('./data/roster.csv', '_blank', 'noopener'), 'secondary-button'));
   wrapper.appendChild(heading);
   if (!data.employees.length) {
     wrapper.appendChild(emptyState('Build the department roster', 'Add the DM first, then add each reporting level.'));
@@ -514,7 +681,7 @@ function rosterBranch(employee, visited) {
   identity.append(avatar(employee.name), element('div'));
   identity.lastChild.append(
     element('h3', '', employee.name),
-    element('span', '', `${employee.rosterRole} · ${employee.district}`)
+    element('span', '', `${getViewerLevel(employee.id)} · ${employee.rosterRole} roster role · ${employee.district}`)
   );
   card.append(identity, chip(employee.active === false ? 'Archived' : `${formatHours(employee.weeklyBudget)}h`, 'chip-neutral'));
   if (canEditRosterMember(employee)) card.appendChild(actionButton('Edit', () => openRosterForm(employee), 'secondary-button'));
@@ -577,7 +744,8 @@ function peopleCard(employee) {
   const actions = element('div', 'people-actions');
   actions.append(
     actionButton('Profile', () => openProfileForm(employee), 'secondary-button'),
-    actionButton('Leave', () => openLeaveForm(employee), 'secondary-button'),
+    actionButton('PTO / Leave', () => window.open(PTO_URL, '_blank', 'noopener,noreferrer')),
+    actionButton('Availability record', () => openLeaveForm(employee), 'secondary-button'),
     actionButton('Check-in', () => openCheckInForm(employee), 'secondary-button'),
     actionButton('Goal', () => openGoalForm(employee), 'secondary-button'),
     actionButton('1:1', () => openOneOnOneForm(employee), 'secondary-button')
@@ -623,7 +791,8 @@ function openProjectForm(project) {
     eyebrow: 'Project portfolio',
     title: `Edit ${project.name}`,
     fields: [
-      field('ownerId', 'Owner', 'select', project.ownerId, [['', 'Unassigned'], ...activeEmployees().map(employee => [employee.id, employee.name])]),
+      field('ownerId', 'Project lead', 'select', project.ownerId, [['', 'Unassigned'], ...activeEmployees().filter(employee => employee.rosterRole === 'Estimator').map(employee => [employee.id, employee.name])]),
+      field('discipline', 'Primary discipline', 'select', project.discipline, DISTRICTS),
       field('priority', 'Priority', 'select', project.priority, PRIORITIES),
       field('health', 'Health', 'select', project.health, PROJECT_HEALTH),
       field('startDate', 'Start date', 'date', project.startDate),
@@ -657,6 +826,9 @@ function openTaskForm(task = null) {
     ...projects.map(project => [project.id, project.name])
   ];
   const defaultProjectId = task?.projectId || (allowUnutilized ? '' : projects[0]?.id || '');
+  const projectDiscipline = projectById(defaultProjectId)?.discipline;
+  const defaultWorkGroup = task?.workGroup
+    || (projectDiscipline === 'Instrumentation' ? 'Instrumentation' : 'Electrical');
   const scopeCandidates = isSetupMode()
     ? activeEmployees()
     : actor ? activeEmployees().filter(employee => employee.id === actor.id || getEmployeeDescendantIds(actor.id).has(employee.id)) : [];
@@ -670,19 +842,35 @@ function openTaskForm(task = null) {
       field('scopeOwnerId', 'Owning group / lead', 'select', task?.scopeOwnerId || actor?.id || '', [['', 'Select scope…'], ...scopeCandidates.map(employee => [employee.id, `${employee.name} · ${employee.rosterRole}`])]),
       field('assigneeId', 'Assignee', 'select', task?.assigneeId || '', [['', 'Unassigned'], ...delegateCandidates.map(employee => [employee.id, employee.name])]),
       field('budgetHours', 'Estimated hour budget', 'number', task?.budgetHours ?? '', null, true),
-      field('wbs', 'WBS', 'text', task?.wbs || ''),
-      field('io', 'IO', 'text', task?.io || ''),
+      field('workGroup', 'Work group', 'select', defaultWorkGroup, ['Electrical', 'Instrumentation']),
+      field('wbs', 'WBS', 'text', task?.wbs || DEFAULT_WBS),
+      field('io', 'IO', 'text', task?.io || defaultIoFor(defaultProjectId, defaultWorkGroup)),
+      field('plannedWeekKey', 'Planned week starting', 'date', task?.plannedWeekKey || getCurrentWeekKey(), null, true),
       field('status', 'Status', 'select', task?.status || 'To do', TASK_STATUSES),
       field('priority', 'Priority', 'select', task?.priority || 'Medium', PRIORITIES),
       field('dueDate', 'Due date', 'date', task?.dueDate || ''),
       field('description', 'Details', 'textarea', task?.description || '')
     ],
+    onReady: inputs => {
+      const updateIo = () => {
+        inputs.get('io').value = defaultIoFor(inputs.get('projectId').value, inputs.get('workGroup').value);
+      };
+      inputs.get('projectId').addEventListener('change', () => {
+        const discipline = projectById(inputs.get('projectId').value)?.discipline;
+        if (discipline === 'Electrical' || discipline === 'Instrumentation') {
+          inputs.get('workGroup').value = discipline;
+        }
+        updateIo();
+      });
+      inputs.get('workGroup').addEventListener('change', updateIo);
+    },
     onSave: values => {
       if (!values.title.trim()) {
         showToast('Enter an action-item title.');
         return false;
       }
       values.budgetHours = Number(values.budgetHours);
+      values.plannedWeekKey = getWeekKey(new Date(`${values.plannedWeekKey}T12:00:00`));
       if (!Number.isFinite(values.budgetHours) || values.budgetHours <= 0) {
         showToast('Enter an estimated hour budget greater than zero.');
         return false;
@@ -793,6 +981,20 @@ function openTaskNoteForm(task) {
       return true;
     }
   });
+}
+
+function canDeleteTaskNote(task, note) {
+  const actor = currentActor();
+  return isSetupMode() || canManageTask(task) || Boolean(actor && note.employeeId === actor.id);
+}
+
+function deleteTaskNote(task, note) {
+  if (!canDeleteTaskNote(task, note)) return;
+  if (!window.confirm('Remove this task note?')) return;
+  task.notes = task.notes.filter(candidate => candidate.id !== note.id);
+  task.updatedAt = new Date().toISOString();
+  commit('Task note', `A note was removed from ${task.title}.`, 'task', task.id);
+  renderWorkspace();
 }
 
 function openRosterForm(employee = null) {
@@ -1010,6 +1212,7 @@ function openForm(config) {
     inputs.set(definition.name, input);
     fields.appendChild(wrapper);
   });
+  config.onReady?.(inputs);
 
   dialogSubmit = () => {
     const values = {};
@@ -1021,6 +1224,10 @@ function openForm(config) {
     return saved;
   };
   document.getElementById('managementDialog').showModal();
+}
+
+function defaultIoFor(projectId, workGroup) {
+  return projectId ? DEFAULT_IO[workGroup] || DEFAULT_IO.Electrical : DEFAULT_IO.Unutilized;
 }
 
 function field(name, label, type, value = '', options = null, required = false) {
@@ -1198,11 +1405,12 @@ function isSetupMode() {
 }
 
 function roleRank(role) {
-  return { DM: 4, ADM: 3, Lead: 2, Estimator: 1 }[role] || 0;
+  return { DM: 3, ADM: 2, Estimator: 1 }[role] || 0;
 }
 
 function canCreateActionItems() {
-  return isSetupMode() || Boolean(currentActor() && currentActor().rosterRole !== 'Estimator');
+  const actor = currentActor();
+  return isSetupMode() || Boolean(actor && getViewerLevel(actor.id) !== 'Estimator');
 }
 
 function canManageTask(task) {
@@ -1219,6 +1427,12 @@ function manageableProjects() {
 function delegatableEmployees() {
   const actor = currentActor();
   if (!actor) return [];
+  if (getViewerLevel(actor.id) === 'Lead') {
+    return activeEmployees().filter(employee =>
+      employee.id === actor.id
+      || (employee.rosterRole === 'Estimator' && employee.managerId === actor.managerId)
+    );
+  }
   const ids = new Set([actor.id, ...getEmployeeDescendantIds(actor.id)]);
   return activeEmployees().filter(employee => ids.has(employee.id));
 }

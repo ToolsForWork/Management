@@ -17,6 +17,7 @@ import {
   removeJobFromAssignments,
   totalHoursForEmployeeWeek,
   getEffectiveEmployeeCapacity,
+  createDefaultProjectChecklist,
   recordActivity,
   scheduleSave
 } from './data.js';
@@ -61,6 +62,8 @@ export function addJob(name, category, jobClass, color) {
     subtaskGroupCollapsed: {},
     hoursBudget: 0,
     ownerId: '',
+    discipline: DEFAULT_DISTRICT,
+    checklist: createDefaultProjectChecklist(),
     priority: 'Medium',
     health: category === 'Complete' ? 'Complete' : 'On track',
     startDate: '',
@@ -96,7 +99,9 @@ export function removeJob(jobId) {
 ------------------------------------------------------- */
 export function addEmployee(name, weeklyBudget, district) {
   const normalizedName = name.trim();
-  const budget = Number(weeklyBudget);
+  const budget = weeklyBudget === '' || weeklyBudget === null || weeklyBudget === undefined
+    ? 40
+    : Number(weeklyBudget);
   if (!normalizedName) {
     showToast('Enter an employee name.');
     return false;
