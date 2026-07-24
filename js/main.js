@@ -1,21 +1,21 @@
-// main.js
 import {
   data,
   startOfWeek,
+  getWeekKey,
   pickUnusedColor,
   loadFromLocalStorage,
   scheduleSave,
-  buildSharePayload,
+  createSnapshot,
+  replaceData,
   encodeSharePayload,
   tryLoadFromHash,
   getCurrentWeekKey,
   getAssignmentsForWeek,
-  totalHoursForEmployeeWeek
+  totalHoursForEmployeeWeek,
+  copyWeekAssignments,
+  hasAssignmentsForWeek
 } from './data.js';
-import {
-  renderWeekLabel,
-  forceChartUpdate
-} from './charts.js';
+import { renderWeekLabel, forceChartUpdate } from './charts.js';
 import {
   renderJobs,
   renderEmployees,
@@ -26,300 +26,326 @@ import {
   makeResizable
 } from './ui.js';
 
-// renderAll
+const THEME_KEY = 'planner-theme';
+
 export function renderAll() {
   renderWeekLabel();
   renderJobs();
   renderEmployees();
   forceChartUpdate();
+}
+
+initialize();
+
+function initialize() {
+  initializeTheme();
+  if (!tryLoadFromHash(showToast)) loadFromLocalStorage();
+  wireMenus();
+  wireWeekControls();
+  wireCreationForms();
+  wireFileActions();
+  wireSearch();
+  renderAll();
+
+  const colorInput = document.getElementById('jobColorInput');
+  colorInput.value = pickUnusedColor();
+
+  makeResizable(
+    document.getElementById('divider1'),
+    document.querySelector('.chart-column'),
+    document.querySelector('.jobs-column')
+  );
+  makeResizable(
+    document.getElementById('divider2'),
+    document.querySelector('.jobs-column'),
+    document.querySelector('.employees-column')
+  );
+
+  window.addEventListener('resize', forceChartUpdate);
+}
+
+function wireMenus() {
+  const menus = [
+    [document.getElementById('fileBtn'), document.getElementById('fileMenu')],
+    [document.getElementById('settingsBtn'), document.getElementById('settingsMenu')]
+  ];
+
+  menus.forEach(([button, menu]) => {
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      const willOpen = menu.classList.contains('hidden');
+      closeMenus(menus);
+      menu.classList.toggle('hidden', !willOpen);
+      button.setAttribute('aria-expanded', String(willOpen));
+    });
+  });
+
+  document.addEventListener('click', event => {
+    if (!menus.some(([, menu]) => menu.contains(event.target))) closeMenus(menus);
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') closeMenus(menus);
+  });
+}
+
+function closeMenus(menus) {
+  menus.forEach(([button, menu]) => {
+    menu.classList.add('hidden');
+    button.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function wireWeekControls() {
+  document.getElementById('prevWeekBtn').addEventListener('click', () => changeWeek(-7));
+  document.getElementById('nextWeekBtn').addEventListener('click', () => changeWeek(7));
+  document.getElementById('jumpToPresentBtn').addEventListener('click', () => {
+    data.currentWeekStart = startOfWeek(new Date());
+    renderAll();
+    scheduleSave();
+  });
+  document.getElementById('copyPreviousWeekBtn').addEventListener('click', copyPreviousWeek);
+}
+
+function changeWeek(days) {
+  const nextWeek = new Date(data.currentWeekStart);
+  nextWeek.setDate(nextWeek.getDate() + days);
+  data.currentWeekStart = startOfWeek(nextWeek);
+  renderAll();
   scheduleSave();
 }
 
-// dark mode + settings + file menu wiring stays here or in ui.js if you prefer
+function copyPreviousWeek() {
+  const targetWeekKey = getCurrentWeekKey();
+  const previousWeek = new Date(data.currentWeekStart);
+  previousWeek.setDate(previousWeek.getDate() - 7);
+  const sourceWeekKey = getWeekKey(previousWeek);
 
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('jobColorInput').value = pickUnusedColor();
-});
+  if (!hasAssignmentsForWeek(sourceWeekKey)) {
+    showToast('The previous week has no assignments to copy.');
+    return;
+  }
+  if (hasAssignmentsForWeek(targetWeekKey)
+    && !window.confirm('Replace this week’s assignments with a copy of the previous week?')) {
+    return;
+  }
 
-// week nav
-document.getElementById('prevWeekBtn').addEventListener('click', () => {
-  data.currentWeekStart.setDate(data.currentWeekStart.getDate() - 7);
+  copyWeekAssignments(sourceWeekKey, targetWeekKey);
   renderAll();
-});
-document.getElementById('nextWeekBtn').addEventListener('click', () => {
-  data.currentWeekStart.setDate(data.currentWeekStart.getDate() + 7);
-  renderAll();
-});
-document.getElementById('jumpToPresentBtn').addEventListener('click', () => {
-  data.currentWeekStart = startOfWeek(new Date());
-  renderAll();
-});
+  scheduleSave();
+  showToast('Previous week copied.');
+}
 
-document.addEventListener("DOMContentLoaded", () => {
+function wireCreationForms() {
+  const jobNameInput = document.getElementById('jobNameInput');
+  const employeeNameInput = document.getElementById('employeeNameInput');
 
-  // FILE MENU
-  const fileBtn = document.getElementById("fileBtn");
-  const fileMenu = document.getElementById("fileMenu");
+  const submitJob = () => {
+    const added = addJob(
+      jobNameInput.value,
+      document.getElementById('jobCategoryInput').value,
+      document.getElementById('jobClassInput').value,
+      document.getElementById('jobColorInput').value
+    );
+    if (!added) return;
+    jobNameInput.value = '';
+    document.getElementById('jobColorInput').value = pickUnusedColor();
+    jobNameInput.focus();
+  };
 
-  fileBtn.addEventListener("click", e => {
-    e.stopPropagation();
-    fileMenu.classList.toggle("hidden");
+  const submitEmployee = () => {
+    const budgetInput = document.getElementById('employeeBudgetInput');
+    const added = addEmployee(
+      employeeNameInput.value,
+      budgetInput.value,
+      document.getElementById('employeeDistrictInput').value
+    );
+    if (!added) return;
+    employeeNameInput.value = '';
+    budgetInput.value = '';
+    employeeNameInput.focus();
+  };
+
+  document.getElementById('addJobBtn').addEventListener('click', submitJob);
+  document.getElementById('addEmployeeBtn').addEventListener('click', submitEmployee);
+  jobNameInput.addEventListener('keydown', event => {
+    if (event.key === 'Enter') submitJob();
   });
-
-  document.addEventListener("click", e => {
-    if (!fileMenu.contains(e.target) && e.target !== fileBtn) {
-      fileMenu.classList.add("hidden");
-    }
-  });
-
-  // SETTINGS MENU
-  const settingsBtn = document.getElementById("settingsBtn");
-  const settingsMenu = document.getElementById("settingsMenu");
-
-  settingsBtn.addEventListener("click", e => {
-    e.stopPropagation();
-    settingsMenu.classList.toggle("hidden");
-  });
-
-  document.addEventListener("click", e => {
-    if (!settingsMenu.contains(e.target) && e.target !== settingsBtn) {
-      settingsMenu.classList.add("hidden");
-    }
-  });
-
-});
-
-document.addEventListener("DOMContentLoaded", () => {
-
-  /* ---------------- FILE MENU ACTIONS ---------------- */
-
-  // Export Week CSV
-  document.getElementById("exportCsvBtn").addEventListener("click", () => {
-    const weekKey = getCurrentWeekKey();
-    const weekAssignments = getAssignmentsForWeek(weekKey);
-
-    const rows = [['Week', 'Employee', 'District', 'Job', 'Hours', 'EmployeeBudget', 'TotalAllocatedForEmployee']];
-
-    data.employees.forEach(emp => {
-      const empAssignments = weekAssignments[emp.id] || {};
-      const total = totalHoursForEmployeeWeek(weekKey, emp.id);
-      const jobIds = Object.keys(empAssignments);
-
-      if (jobIds.length === 0) {
-        rows.push([weekKey, emp.name, emp.district || '', '', '', emp.weeklyBudget, total]);
-      } else {
-        jobIds.forEach(jobId => {
-          const job = data.jobs.find(j => j.id === jobId);
-          const jobName = job ? job.name : '(deleted job)';
-          const hours = empAssignments[jobId].hours || 0;
-          rows.push([weekKey, emp.name, emp.district || '', jobName, hours, emp.weeklyBudget, total]);
-        });
-      }
+  [employeeNameInput, document.getElementById('employeeBudgetInput')].forEach(input => {
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter') submitEmployee();
     });
-
-    downloadCsv(rows, `week_${weekKey}.csv`);
   });
+}
 
-  // Export ALL Weeks CSV
-  document.getElementById("exportAllCsvBtn").addEventListener("click", () => {
-    const rows = [['Week', 'Employee', 'District', 'Job', 'Hours', 'EmployeeBudget', 'TotalAllocatedForEmployee']];
-    const allWeekKeys = Object.keys(data.assignments).sort();
+function wireFileActions() {
+  document.getElementById('exportCsvBtn').addEventListener('click', exportCurrentWeekCsv);
+  document.getElementById('exportAllCsvBtn').addEventListener('click', exportAllWeeksCsv);
+  document.getElementById('exportJsonBtn').addEventListener('click', exportJson);
+  document.getElementById('copyShareLinkBtn').addEventListener('click', copyShareLink);
+  document.getElementById('importBtn').addEventListener('click', () => {
+    document.getElementById('importJsonInput').click();
+  });
+  document.getElementById('importJsonInput').addEventListener('change', importJson);
+}
 
-    if (allWeekKeys.length === 0) {
-      showToast('No week data to export yet.');
+function exportCurrentWeekCsv() {
+  const weekKey = getCurrentWeekKey();
+  const weekAssignments = getAssignmentsForWeek(weekKey);
+  const rows = [csvHeaders()];
+
+  data.employees.forEach(employee => {
+    const employeeAssignments = weekAssignments[employee.id] || {};
+    const total = totalHoursForEmployeeWeek(weekKey, employee.id);
+    const jobIds = Object.keys(employeeAssignments);
+
+    if (jobIds.length === 0) {
+      rows.push([weekKey, employee.name, employee.district, '', '', employee.weeklyBudget, total]);
       return;
     }
+    jobIds.forEach(jobId => {
+      const job = data.jobs.find(candidate => candidate.id === jobId);
+      rows.push([
+        weekKey,
+        employee.name,
+        employee.district,
+        job?.name || '(deleted project)',
+        employeeAssignments[jobId].hours || 0,
+        employee.weeklyBudget,
+        total
+      ]);
+    });
+  });
 
-    allWeekKeys.forEach(weekKey => {
-      const weekAssignments = data.assignments[weekKey] || {};
+  downloadCsv(rows, `week_${weekKey}.csv`);
+  showToast(`Exported ${rows.length - 1} rows.`);
+}
 
-      data.employees.forEach(emp => {
-        const empAssignments = weekAssignments[emp.id] || {};
-        const total = totalHoursForEmployeeWeek(weekKey, emp.id);
-        const jobIds = Object.keys(empAssignments);
+function exportAllWeeksCsv() {
+  const rows = [csvHeaders()];
+  const weekKeys = Object.keys(data.assignments).sort();
 
-        if (jobIds.length === 0) {
-          if (total > 0) {
-            rows.push([weekKey, emp.name, emp.district || '', '', '', emp.weeklyBudget, total]);
-          }
-        } else {
-          jobIds.forEach(jobId => {
-            const job = data.jobs.find(j => j.id === jobId);
-            const jobName = job ? job.name : '(deleted job)';
-            const hours = empAssignments[jobId]?.hours || 0;
-            if (hours > 0) {
-              rows.push([weekKey, emp.name, emp.district || '', jobName, hours, emp.weeklyBudget, total]);
-            }
-          });
-        }
+  weekKeys.forEach(weekKey => {
+    const weekAssignments = getAssignmentsForWeek(weekKey);
+    data.employees.forEach(employee => {
+      const employeeAssignments = weekAssignments[employee.id] || {};
+      const total = totalHoursForEmployeeWeek(weekKey, employee.id);
+      Object.entries(employeeAssignments).forEach(([jobId, assignment]) => {
+        if (!(assignment.hours > 0)) return;
+        const job = data.jobs.find(candidate => candidate.id === jobId);
+        rows.push([
+          weekKey,
+          employee.name,
+          employee.district,
+          job?.name || '(deleted project)',
+          assignment.hours,
+          employee.weeklyBudget,
+          total
+        ]);
       });
     });
+  });
 
-    if (rows.length === 1) {
-      showToast('No hours data found across any week.');
+  if (rows.length === 1) {
+    showToast('There are no assigned hours to export.');
+    return;
+  }
+  downloadCsv(rows, 'planner_all_weeks.csv');
+  showToast(`Exported ${rows.length - 1} rows across ${weekKeys.length} weeks.`);
+}
+
+function csvHeaders() {
+  return ['Week', 'Employee', 'District', 'Project', 'Hours', 'EmployeeCapacity', 'TotalAllocated'];
+}
+
+function exportJson() {
+  downloadBlob(
+    JSON.stringify(createSnapshot(), null, 2),
+    'application/json',
+    'management_planner_data.json'
+  );
+  showToast('Backup exported.');
+}
+
+function importJson(event) {
+  const [file] = event.target.files;
+  event.target.value = '';
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const imported = JSON.parse(reader.result);
+      replaceData(imported);
+      renderAll();
+      scheduleSave();
+      showToast('Backup imported successfully.');
+    } catch (error) {
+      showToast(error.message || 'The selected file is not a valid planner backup.', 5000);
+    }
+  };
+  reader.onerror = () => showToast('The selected file could not be read.');
+  reader.readAsText(file);
+}
+
+async function copyShareLink() {
+  try {
+    const encoded = encodeSharePayload(createSnapshot());
+    const url = `${location.href.split('#')[0]}#data=${encoded}`;
+    if (url.length > 100_000) {
+      showToast('This snapshot is too large for a reliable link. Export a backup instead.', 5000);
       return;
     }
+    await copyText(url);
+    showToast('Snapshot link copied. It will not stay in sync automatically.', 4000);
+  } catch (error) {
+    console.error(error);
+    showToast('Could not create a share link. Export a backup instead.', 4000);
+  }
+}
 
-    downloadCsv(rows, `planner_all_weeks.csv`);
-    showToast(`✓ Exported ${rows.length - 1} rows across ${allWeekKeys.length} weeks.`);
-  });
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.className = 'clipboard-fallback';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('Clipboard access failed.');
+}
 
-  // Export JSON
-  document.getElementById("exportJsonBtn").addEventListener("click", () => {
-    const exportData = {
-      employees: JSON.parse(JSON.stringify(data.employees)),
-      jobs: JSON.parse(JSON.stringify(data.jobs)),
-      assignments: JSON.parse(JSON.stringify(data.assignments)),
-      currentWeekStart: data.currentWeekStart.toISOString()
-    };
+function downloadBlob(content, type, filename) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
 
-    const jsonStr = JSON.stringify(exportData, null, 2);
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'planner_data.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+function initializeTheme() {
+  const savedTheme = localStorage.getItem(THEME_KEY);
+  const preferredTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  const theme = savedTheme === 'dark' || savedTheme === 'light' ? savedTheme : preferredTheme;
+  document.documentElement.dataset.theme = theme;
 
-    showToast('✓ JSON exported.');
-  });
-
-  // Import JSON
-  document.getElementById("importBtn").addEventListener("click", () => {
-    document.getElementById("importJsonInput").click();
-  });
-
-  document.getElementById("importJsonInput").addEventListener("change", e => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = evt => {
-      try {
-        const imported = JSON.parse(evt.target.result);
-
-        if (!Array.isArray(imported.employees)) return alert('Invalid JSON: employees must be an array.');
-        if (!Array.isArray(imported.jobs)) return alert('Invalid JSON: jobs must be an array.');
-        if (typeof imported.assignments !== 'object') return alert('Invalid JSON: assignments must be an object.');
-
-        data.employees = imported.employees;
-        data.jobs = imported.jobs;
-        data.assignments = imported.assignments;
-        data.currentWeekStart = imported.currentWeekStart
-          ? new Date(imported.currentWeekStart)
-          : startOfWeek(new Date());
-
-        renderAll();
-        showToast('✓ Data imported successfully.');
-      } catch {
-        alert('Failed to parse JSON.');
-      }
-    };
-
-    reader.readAsText(file);
-    e.target.value = '';
-  });
-
-  /* ---------------- DARK MODE ---------------- */
-  const darkToggle = document.getElementById("darkModeToggle");
-  darkToggle.addEventListener("change", () => {
-    const theme = darkToggle.checked ? "dark" : "light";
-    document.documentElement.setAttribute("data-theme", theme);
+  const toggle = document.getElementById('darkModeToggle');
+  toggle.checked = theme === 'dark';
+  toggle.addEventListener('change', () => {
+    const nextTheme = toggle.checked ? 'dark' : 'light';
+    document.documentElement.dataset.theme = nextTheme;
+    localStorage.setItem(THEME_KEY, nextTheme);
     forceChartUpdate();
   });
-
-});
-
-// add job / employee
-document.getElementById('addJobBtn').addEventListener('click', () => {
-  const nameInput = document.getElementById('jobNameInput');
-  const categoryInput = document.getElementById('jobCategoryInput');
-  const colorInput = document.getElementById('jobColorInput');
-  const classInput = document.getElementById('jobClassInput');
-  addJob(nameInput.value, categoryInput.value, classInput.value, colorInput.value);
-  nameInput.value = '';
-});
-
-document.getElementById('jobNameInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter') {
-    const nameInput = document.getElementById('jobNameInput');
-    const categoryInput = document.getElementById('jobCategoryInput');
-    const colorInput = document.getElementById('jobColorInput');
-    const classInput = document.getElementById('jobClassInput');
-    addJob(nameInput.value, categoryInput.value, classInput.value, colorInput.value);
-    nameInput.value = '';
-  }
-});
-
-document.getElementById('addEmployeeBtn').addEventListener('click', () => {
-  const nameInput = document.getElementById('employeeNameInput');
-  const budgetInput = document.getElementById('employeeBudgetInput');
-  const districtInput = document.getElementById('employeeDistrictInput');
-  addEmployee(nameInput.value, budgetInput.value, districtInput.value);
-  nameInput.value = '';
-  budgetInput.value = '';
-});
-
-document.getElementById('employeeNameInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter') {
-    const nameInput = document.getElementById('employeeNameInput');
-    const budgetInput = document.getElementById('employeeBudgetInput');
-    const districtInput = document.getElementById('employeeDistrictInput');
-    addEmployee(nameInput.value, budgetInput.value, districtInput.value);
-    nameInput.value = '';
-    budgetInput.value = '';
-  }
-});
-
-// share link button
-document.getElementById('copyShareLinkBtn').addEventListener('click', () => {
-  try {
-    const payload = buildSharePayload();
-    const encoded = encodeSharePayload(payload);
-    const url = `${location.href.split('#')[0]}#data=${encoded}`;
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(url).then(() => {
-        showToast('✓ Share link copied to clipboard!');
-      }).catch(() => fallbackCopyShareLink(url));
-    } else {
-      fallbackCopyShareLink(url);
-    }
-  } catch (e) {
-    showToast('⚠ Could not generate share link (data may be too large).');
-    console.error(e);
-  }
-});
-
-function fallbackCopyShareLink(url) {
-  const ta = document.createElement('textarea');
-  ta.value = url;
-  ta.style.cssText = 'position:fixed;opacity:0;';
-  document.body.appendChild(ta);
-  ta.select();
-  document.execCommand('copy');
-  document.body.removeChild(ta);
-  showToast('✓ Share link copied to clipboard!');
 }
 
-// CSV + JSON export/import wiring can also live here, calling helpers in ui/data
-
-// startup
-if (!tryLoadFromHash(showToast)) {
-  loadFromLocalStorage();
+function wireSearch() {
+  document.getElementById('jobSearchInput').addEventListener('input', renderJobs);
+  document.getElementById('employeeSearchInput').addEventListener('input', renderEmployees);
 }
-renderAll();
-
-// resizable columns
-makeResizable(
-  document.getElementById('divider1'),
-  document.querySelector('.chart-column'),
-  document.querySelector('.jobs-column')
-);
-makeResizable(
-  document.getElementById('divider2'),
-  document.querySelector('.jobs-column'),
-  document.querySelector('.employees-column')
-);

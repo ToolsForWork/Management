@@ -1,6 +1,7 @@
 // charts.js
 import {
   data,
+  formatDate,
   getCurrentWeekKey,
   getAssignmentsForWeek,
   totalHoursAllEmployees,
@@ -11,19 +12,15 @@ const chartHeaderLineEl = document.getElementById('chartHeaderLine');
 const chartLegendEl = document.getElementById('chartLegend');
 const projectChartCanvas = document.getElementById('projectChart');
 const burnDownChartCanvas = document.getElementById('burnDownChart');
+let chartFrame = null;
 
 export function forceChartUpdate() {
-  if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(() => {
-      renderProjectChart();
-      renderBurnDownChart();
-    });
-  } else {
-    setTimeout(() => {
-      renderProjectChart();
-      renderBurnDownChart();
-    }, 30);
-  }
+  if (chartFrame) cancelAnimationFrame(chartFrame);
+  chartFrame = requestAnimationFrame(() => {
+    chartFrame = null;
+    renderProjectChart();
+    renderBurnDownChart();
+  });
 }
 
 export function renderWeekLabel() {
@@ -31,37 +28,30 @@ export function renderWeekLabel() {
   const end = new Date(start);
   end.setDate(start.getDate() + 6);
   const weekLabelEl = document.getElementById('weekLabel');
-  weekLabelEl.textContent = `${start.toISOString().slice(0,10)} to ${end.toISOString().slice(0,10)}`;
+  weekLabelEl.textContent = `${formatDate(start)} – ${formatDate(end)}`;
 }
-
-// project chart (unchanged logic, just wrapped)
 
 export function renderProjectChart() {
   const weekKey = getCurrentWeekKey();
   const canvas = projectChartCanvas;
-  const ctx = canvas.getContext('2d');
-
-  canvas.width = canvas.clientWidth;
-  canvas.height = canvas.clientHeight;
-
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  const textColor = isDark ? '#d1d5db' : '#000000';
-  const bgColor = isDark ? '#1f2937' : '#ffffff';
-
-  ctx.fillStyle = bgColor;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const textColor = isDark ? '#e2e8f0' : '#172033';
+  const mutedColor = isDark ? '#94a3b8' : '#64748b';
+  const trackColor = isDark ? '#27344a' : '#e8edf3';
+  const bgColor = isDark ? '#172033' : '#ffffff';
 
   const week = getAssignmentsForWeek(weekKey);
-  const projectTotals = {};
-  const projectEmployees = {};
+  const projectTotals = new Map();
+  const projectEmployees = new Map();
+  const jobMap = new Map(data.jobs.map(job => [job.id, job]));
 
   Object.entries(week).forEach(([empId, empAssignments]) => {
     Object.entries(empAssignments).forEach(([jobId, a]) => {
-      const parentHours = a.hours || 0;
+      const parentHours = Number(a.hours) || 0;
       if (parentHours < 0.0001) return;
-      projectTotals[jobId] = (projectTotals[jobId] || 0) + parentHours;
-      if (!projectEmployees[jobId]) projectEmployees[jobId] = new Set();
-      projectEmployees[jobId].add(empId);
+      projectTotals.set(jobId, (projectTotals.get(jobId) || 0) + parentHours);
+      if (!projectEmployees.has(jobId)) projectEmployees.set(jobId, new Set());
+      projectEmployees.get(jobId).add(empId);
     });
   });
 
@@ -69,14 +59,27 @@ export function renderProjectChart() {
   const capacity = totalEmployeeCapacity();
   const unutilizedHours = Math.max(0, capacity - usedHours);
   const utilizationPct = capacity > 0 ? Math.round((usedHours / capacity) * 100) : 0;
-  chartHeaderLineEl.textContent = `Utilization: ${usedHours}/${capacity} - ${utilizationPct}%`;
+  const balanceLabel = usedHours > capacity
+    ? `${formatHours(usedHours - capacity)} hrs over capacity`
+    : `${formatHours(unutilizedHours)} hrs available`;
+  chartHeaderLineEl.textContent = `${formatHours(usedHours)} of ${formatHours(capacity)} hrs allocated · ${utilizationPct}% · ${balanceLabel}`;
 
-  if (unutilizedHours > 0) {
-    projectTotals['__unutilized__'] = unutilizedHours;
-  }
+  if (unutilizedHours > 0) projectTotals.set('__unutilized__', unutilizedHours);
+
+  const rows = Array.from(projectTotals.entries())
+    .filter(([jobId]) => jobId === '__unutilized__' || jobMap.has(jobId))
+    .sort((left, right) => {
+      if (left[0] === '__unutilized__') return 1;
+      if (right[0] === '__unutilized__') return -1;
+      return right[1] - left[1];
+    });
+  const desiredHeight = Math.max(240, rows.length * 31 + 36);
+  const { ctx, width, height } = prepareCanvas(canvas, desiredHeight);
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, width, height);
 
   chartLegendEl.innerHTML = '';
-  Object.entries(projectTotals).forEach(([jobId, hours]) => {
+  rows.forEach(([jobId, hours]) => {
     const legendItem = document.createElement('div');
     legendItem.className = 'legend-item';
 
@@ -85,14 +88,13 @@ export function renderProjectChart() {
 
     let labelText = '';
     if (jobId === '__unutilized__') {
-      colorBox.style.background = '#9ca3af';
-      labelText = `Unutilized: ${hours} hrs`;
+      colorBox.style.background = '#94a3b8';
+      labelText = `Available: ${formatHours(hours)} hrs`;
     } else {
-      const job = data.jobs.find(j => j.id === jobId);
-      if (!job) return;
+      const job = jobMap.get(jobId);
       colorBox.style.background = job.color || '#03bafc';
-      const empCount = projectEmployees[jobId] ? projectEmployees[jobId].size : 0;
-      labelText = `${job.name}: ${hours} hrs (${empCount} employee${empCount === 1 ? '' : 's'})`;
+      const empCount = projectEmployees.get(jobId)?.size || 0;
+      labelText = `${job.name}: ${formatHours(hours)} hrs · ${empCount} ${empCount === 1 ? 'person' : 'people'}`;
     }
 
     const label = document.createElement('span');
@@ -102,57 +104,44 @@ export function renderProjectChart() {
     chartLegendEl.appendChild(legendItem);
   });
 
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (rows.length === 0) {
+    drawEmptyMessage(ctx, width, height, textColor, 'Assign project hours to see allocation.');
+    canvas.setAttribute('aria-label', 'No project allocation recorded for this week.');
+    return;
+  }
 
-  const jobIds = Object.keys(projectTotals);
-  if (jobIds.length === 0) return;
-
-  const width = canvas.width;
-  const height = canvas.height;
-  const max = Math.max(...Object.values(projectTotals), 1);
-  const barWidth = Math.max(30, Math.min(60, (width - 80) / jobIds.length - 20));
-  const gap = 20;
-  const bottomMargin = 30;
-  const topMargin = 30;
-  const chartHeight = height - bottomMargin - topMargin;
-
-  ctx.font = '11px Arial';
+  const leftMargin = Math.min(142, Math.max(92, width * 0.34));
+  const rightMargin = 52;
+  const chartWidth = Math.max(20, width - leftMargin - rightMargin - 12);
+  const maxHours = Math.max(...rows.map(([, hours]) => hours), 1);
+  ctx.font = '11px system-ui, sans-serif';
   ctx.textBaseline = 'middle';
 
-  jobIds.forEach((jobId, index) => {
-    const hours = projectTotals[jobId];
-    const x = 40 + index * (barWidth + gap);
-    const barHeight = (hours / max) * chartHeight;
-    const y = height - bottomMargin - barHeight;
+  rows.forEach(([jobId, hours], index) => {
+    const job = jobMap.get(jobId);
+    const name = jobId === '__unutilized__' ? 'Available' : job.name;
+    const color = jobId === '__unutilized__' ? '#94a3b8' : job.color || '#3b82f6';
+    const y = 19 + index * 31;
+    const barWidth = Math.max(2, (hours / maxHours) * chartWidth);
 
-    let color = '#03bafc';
-    let name = '';
-
-    if (jobId === '__unutilized__') {
-      color = '#9ca3af';
-      name = 'Unutilized';
-    } else {
-      const job = data.jobs.find(j => j.id === jobId);
-      if (!job) return;
-      color = job.color || '#03bafc';
-      name = job.name;
-    }
-
+    ctx.fillStyle = mutedColor;
+    ctx.textAlign = 'right';
+    ctx.fillText(truncateText(ctx, name, leftMargin - 18), leftMargin - 8, y + 7);
+    ctx.fillStyle = trackColor;
+    roundRect(ctx, leftMargin, y, chartWidth, 14, 5);
+    ctx.fill();
     ctx.fillStyle = color;
-    ctx.fillRect(x, y, barWidth, barHeight);
-
-    const capForPct = totalEmployeeCapacity();
-    const percentOfWorkload = capForPct > 0 ? Math.round((hours / capForPct) * 100) : 0;
+    roundRect(ctx, leftMargin, y, barWidth, 14, 5);
+    ctx.fill();
     ctx.fillStyle = textColor;
-    ctx.textAlign = 'center';
-    ctx.fillText(`${hours}h (${percentOfWorkload}%)`, x + barWidth / 2, y - 10);
-
-    ctx.save();
-    ctx.translate(x + barWidth / 2, height - bottomMargin + 12);
-    ctx.rotate(-Math.PI / 4);
-    ctx.fillText(name, 0, 0);
-    ctx.restore();
+    ctx.textAlign = 'left';
+    ctx.fillText(`${formatHours(hours)}h`, leftMargin + chartWidth + 7, y + 7);
   });
+
+  canvas.setAttribute(
+    'aria-label',
+    `${formatHours(usedHours)} of ${formatHours(capacity)} team hours allocated across ${projectTotals.size - (unutilizedHours > 0 ? 1 : 0)} ${projectTotals.size - (unutilizedHours > 0 ? 1 : 0) === 1 ? 'project' : 'projects'}.`
+  );
 }
 
 // burn-down chart (logic same as your original, just moved)
@@ -182,18 +171,15 @@ function getWeekKeysForJob(jobId) {
 export function renderBurnDownChart() {
   const canvas = burnDownChartCanvas;
   if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-
-  canvas.width = canvas.clientWidth;
-  canvas.height = canvas.clientHeight;
+  const { ctx, width, height } = prepareCanvas(canvas, 230);
 
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  const textColor = isDark ? '#d1d5db' : '#111827';
-  const bgColor = isDark ? '#1f2937' : '#ffffff';
-  const gridColor = isDark ? '#374151' : '#e5e7eb';
+  const textColor = isDark ? '#dbe4f0' : '#172033';
+  const bgColor = isDark ? '#172033' : '#ffffff';
+  const gridColor = isDark ? '#334158' : '#e2e8f0';
 
   ctx.fillStyle = bgColor;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, width, height);
 
   const budgetedJobs = data.jobs.filter(j => (j.hoursBudget || 0) > 0);
   if (budgetedJobs.length === 0) {
@@ -201,12 +187,11 @@ export function renderBurnDownChart() {
     ctx.font = '12px Arial';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('Set an Hours Budget on a job to see the burn-down chart.', canvas.width / 2, canvas.height / 2);
+    ctx.fillText('Set a project hours budget to see remaining hours.', width / 2, height / 2);
+    canvas.setAttribute('aria-label', 'No projects have an hours budget.');
     return;
   }
 
-  const width = canvas.width;
-  const height = canvas.height;
   const leftMargin = 50;
   const rightMargin = 16;
   const topMargin = 24;
@@ -259,7 +244,7 @@ export function renderBurnDownChart() {
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  const maxLabels = Math.floor(chartW / 60);
+  const maxLabels = Math.max(1, Math.floor(chartW / 60));
   const step = Math.max(1, Math.ceil(sortedWeeks.length / maxLabels));
 
   sortedWeeks.forEach((wk, i) => {
@@ -293,7 +278,8 @@ export function renderBurnDownChart() {
     ctx.font = '12px Arial';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('No hours charged to budgeted jobs yet.', canvas.width / 2, canvas.height / 2);
+    ctx.fillText('No hours charged to budgeted projects yet.', width / 2, height / 2);
+    canvas.setAttribute('aria-label', 'No hours have been charged to budgeted projects.');
     return;
   }
 
@@ -328,4 +314,50 @@ export function renderBurnDownChart() {
     ctx.textBaseline = 'middle';
     ctx.fillText(`${job.name} (${last.remaining}h left)`, lx + (ctx.textAlign === 'left' ? 8 : -8), ly);
   });
+
+  canvas.setAttribute('aria-label', `Remaining budget chart for ${jobLines.length} projects.`);
+}
+
+function prepareCanvas(canvas, cssHeight) {
+  canvas.style.height = `${cssHeight}px`;
+  const width = Math.max(1, Math.floor(canvas.clientWidth));
+  const height = cssHeight;
+  const scale = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.floor(width * scale);
+  canvas.height = Math.floor(height * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  return { ctx, width, height };
+}
+
+function drawEmptyMessage(ctx, width, height, color, message) {
+  ctx.fillStyle = color;
+  ctx.font = '12px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(message, width / 2, height / 2);
+}
+
+function truncateText(ctx, value, maxWidth) {
+  if (ctx.measureText(value).width <= maxWidth) return value;
+  let result = value;
+  while (result.length > 1 && ctx.measureText(`${result}…`).width > maxWidth) {
+    result = result.slice(0, -1);
+  }
+  return `${result}…`;
+}
+
+function roundRect(ctx, x, y, width, height, radius) {
+  const resolvedRadius = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + resolvedRadius, y);
+  ctx.arcTo(x + width, y, x + width, y + height, resolvedRadius);
+  ctx.arcTo(x + width, y + height, x, y + height, resolvedRadius);
+  ctx.arcTo(x, y + height, x, y, resolvedRadius);
+  ctx.arcTo(x, y, x + width, y, resolvedRadius);
+  ctx.closePath();
+}
+
+function formatHours(value) {
+  return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }

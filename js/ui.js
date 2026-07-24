@@ -3,11 +3,15 @@ import {
   data,
   DEFAULT_COLOR,
   DEFAULT_DISTRICT,
+  DISTRICTS,
+  JOB_STATUSES,
+  JOB_CLASSES,
+  SUBTASK_CATEGORIES,
   uuid,
   pickUnusedColor,
   getCurrentWeekKey,
-  getAssignmentsForWeek,
   getEmployeeAssignmentsForWeek,
+  ensureEmployeeAssignmentsForWeek,
   ensureAssignment,
   removeJobFromAssignments,
   removeEmployeeFromAssignments,
@@ -22,6 +26,7 @@ import { forceChartUpdate } from './charts.js';
 ------------------------------------------------------- */
 export function showToast(msg, duration = 2500) {
   const toast = document.getElementById('plannerToast');
+  if (!toast) return;
   toast.textContent = msg;
   toast.classList.add('show');
   clearTimeout(toast._timer);
@@ -32,14 +37,22 @@ export function showToast(msg, duration = 2500) {
    Jobs
 ------------------------------------------------------- */
 export function addJob(name, category, jobClass, color) {
-  if (!name.trim()) return;
+  const normalizedName = name.trim();
+  if (!normalizedName) {
+    showToast('Enter a project name.');
+    return false;
+  }
+  if (data.jobs.some(job => job.name.toLowerCase() === normalizedName.toLowerCase())) {
+    showToast('A project with that name already exists.');
+    return false;
+  }
   const resolvedColor = color || pickUnusedColor();
 
   data.jobs.push({
     id: uuid(),
-    name: name.trim(),
-    category,
-    classification: jobClass,
+    name: normalizedName,
+    category: JOB_STATUSES.includes(category) ? category : 'Other',
+    classification: JOB_CLASSES.includes(jobClass) ? jobClass : 'Class 1',
     color: resolvedColor,
     subtasks: [],
     collapsed: false,
@@ -50,9 +63,13 @@ export function addJob(name, category, jobClass, color) {
   renderJobs();
   forceChartUpdate();
   scheduleSave();
+  showToast(`${normalizedName} added.`);
+  return true;
 }
 
 export function removeJob(jobId) {
+  const job = data.jobs.find(candidate => candidate.id === jobId);
+  if (!job || !window.confirm(`Remove "${job.name}" and all of its assignments?`)) return;
   data.jobs = data.jobs.filter(j => j.id !== jobId);
   removeJobFromAssignments(jobId);
   renderJobs();
@@ -65,24 +82,39 @@ export function removeJob(jobId) {
    Employees
 ------------------------------------------------------- */
 export function addEmployee(name, weeklyBudget, district) {
-  if (!name.trim()) return;
-  const budget = parseFloat(weeklyBudget);
-  if (isNaN(budget) || budget <= 0) return;
+  const normalizedName = name.trim();
+  const budget = Number(weeklyBudget);
+  if (!normalizedName) {
+    showToast('Enter an employee name.');
+    return false;
+  }
+  if (!Number.isFinite(budget) || budget <= 0) {
+    showToast('Weekly capacity must be greater than zero.');
+    return false;
+  }
+  if (data.employees.some(employee => employee.name.toLowerCase() === normalizedName.toLowerCase())) {
+    showToast('An employee with that name already exists.');
+    return false;
+  }
 
   data.employees.push({
     id: uuid(),
-    name: name.trim(),
+    name: normalizedName,
     weeklyBudget: budget,
-    district: district || DEFAULT_DISTRICT,
+    district: DISTRICTS.includes(district) ? district : DEFAULT_DISTRICT,
     collapsed: false
   });
 
   renderEmployees();
   forceChartUpdate();
   scheduleSave();
+  showToast(`${normalizedName} added.`);
+  return true;
 }
 
 export function removeEmployee(empId) {
+  const employee = data.employees.find(candidate => candidate.id === empId);
+  if (!employee || !window.confirm(`Remove "${employee.name}" and all of their assignments?`)) return;
   data.employees = data.employees.filter(e => e.id !== empId);
   removeEmployeeFromAssignments(empId);
   renderEmployees();
@@ -97,9 +129,21 @@ export function renderJobs() {
   const jobsListEl = document.getElementById('jobsList');
   jobsListEl.innerHTML = '';
 
-  const statuses = ['Active', 'Upcoming', 'Complete', 'Other'];
-  const classes = ['Class 1', 'Class 2', 'Class 3', 'Class 4', 'Class 5'];
-  const subCategories = ['Electrical', 'Instrumentation', 'Other'];
+  const query = document.getElementById('jobSearchInput')?.value.trim().toLowerCase() || '';
+  const visibleJobs = query
+    ? data.jobs.filter(job => job.name.toLowerCase().includes(query)
+      || (job.subtasks || []).some(subtask => subtask.name.toLowerCase().includes(query)))
+    : data.jobs;
+
+  if (visibleJobs.length === 0) {
+    jobsListEl.appendChild(createEmptyState(
+      data.jobs.length === 0 ? 'No projects yet' : 'No projects match your search',
+      data.jobs.length === 0
+        ? 'Add the first project above, then assign it to employees.'
+        : 'Try a different project or subtask name.'
+    ));
+    return;
+  }
 
   // Helper to render a single job card
   function renderSingleJob(job) {
@@ -116,6 +160,8 @@ export function renderJobs() {
 
     const dragHandle = document.createElement('div');
     dragHandle.className = 'job-drag-handle';
+    dragHandle.title = 'Drag to reorder project';
+    dragHandle.setAttribute('aria-hidden', 'true');
     dragHandle.addEventListener('mousedown', e => e.stopPropagation());
 
     const colorBox = document.createElement('div');
@@ -123,6 +169,7 @@ export function renderJobs() {
     colorBox.style.background = job.color || DEFAULT_COLOR;
 
     const nameSpan = document.createElement('span');
+    nameSpan.className = 'item-name';
     nameSpan.textContent = job.name;
 
     const colorInput = document.createElement('input');
@@ -148,7 +195,8 @@ export function renderJobs() {
     };
 
     const categorySelect = document.createElement('select');
-    ['Active', 'Upcoming', 'Complete', 'Other'].forEach(c => {
+    categorySelect.setAttribute('aria-label', `Status for ${job.name}`);
+    JOB_STATUSES.forEach(c => {
       const opt = document.createElement('option');
       opt.value = c;
       opt.textContent = c;
@@ -164,7 +212,8 @@ export function renderJobs() {
 
     //Class dropdown
     const classSelect = document.createElement('select');
-    classes.forEach(cls => {
+    classSelect.setAttribute('aria-label', `Class for ${job.name}`);
+    JOB_CLASSES.forEach(cls => {
       const opt = document.createElement('option');
       opt.value = cls;
       opt.textContent = cls;
@@ -188,21 +237,30 @@ export function renderJobs() {
     budgetInput.step = '1';
     budgetInput.value = job.hoursBudget || 0;
     budgetInput.style.width = '52px';
-    budgetInput.onchange = () => {
-      job.hoursBudget = parseFloat(budgetInput.value) || 0;
+    budgetInput.setAttribute('aria-label', `Hours budget for ${job.name}`);
+    budgetInput.oninput = () => {
+      job.hoursBudget = Math.max(0, Number(budgetInput.value) || 0);
       forceChartUpdate();
       scheduleSave();
     };
 
     const collapseBtn = document.createElement('button');
-    collapseBtn.textContent = 'Toggle';
+    collapseBtn.className = 'icon-button';
+    collapseBtn.textContent = job.collapsed ? '▸' : '▾';
+    collapseBtn.title = `${job.collapsed ? 'Expand' : 'Collapse'} ${job.name}`;
+    collapseBtn.setAttribute('aria-label', collapseBtn.title);
     collapseBtn.onclick = () => {
       job.collapsed = !job.collapsed;
       div.classList.toggle('job-collapsed');
+      collapseBtn.textContent = job.collapsed ? '▸' : '▾';
+      scheduleSave();
     };
 
     const removeBtn = document.createElement('button');
-    removeBtn.textContent = 'X';
+    removeBtn.className = 'icon-button danger-button';
+    removeBtn.textContent = '×';
+    removeBtn.title = `Remove ${job.name}`;
+    removeBtn.setAttribute('aria-label', removeBtn.title);
     removeBtn.onclick = () => removeJob(job.id);
 
     headerRow.append(
@@ -224,7 +282,7 @@ export function renderJobs() {
     const subtasksContainer = document.createElement('div');
     subtasksContainer.className = 'job-subtasks';
 
-    subCategories.forEach(subCat => {
+    SUBTASK_CATEGORIES.forEach(subCat => {
       const catBlock = document.createElement('div');
       catBlock.className = 'job-subtask-category';
 
@@ -235,11 +293,12 @@ export function renderJobs() {
       const catHeader = document.createElement('div');
       catHeader.className = 'job-subtask-category-header';
       catHeader.textContent = subCat;
-      catHeader.onclick = () => {
+      makeKeyboardClickable(catHeader, () => {
         catBlock.classList.toggle('collapsed');
         job.subtaskGroupCollapsed = job.subtaskGroupCollapsed || {};
         job.subtaskGroupCollapsed[subCat] = catBlock.classList.contains('collapsed');
-      };
+        scheduleSave();
+      });
 
       const items = document.createElement('div');
       items.className = 'job-subtask-items';
@@ -298,8 +357,12 @@ export function renderJobs() {
           };
 
           const delBtn = document.createElement('button');
-          delBtn.textContent = 'X';
+          delBtn.className = 'icon-button danger-button';
+          delBtn.textContent = '×';
+          delBtn.title = `Remove ${st.name}`;
+          delBtn.setAttribute('aria-label', delBtn.title);
           delBtn.onclick = () => {
+            if (!window.confirm(`Remove subtask "${st.name}"? Existing employee entries will remain as a historical snapshot.`)) return;
             job.subtasks = job.subtasks.filter(x => x !== st);
             renderJobs();
             scheduleSave();
@@ -314,6 +377,7 @@ export function renderJobs() {
 
       const nameInput = document.createElement('input');
       nameInput.placeholder = 'Subtask name';
+      nameInput.setAttribute('aria-label', `New ${subCat} subtask for ${job.name}`);
 
       const addColorInput = document.createElement('input');
       addColorInput.type = 'color';
@@ -336,6 +400,9 @@ export function renderJobs() {
         renderJobs();
         scheduleSave();
       };
+      nameInput.addEventListener('keydown', event => {
+        if (event.key === 'Enter') addBtn.click();
+      });
 
       addRow.append(nameInput, addColorInput, addBtn);
       catBlock.append(catHeader, items, addRow);
@@ -362,21 +429,24 @@ export function renderJobs() {
   }
 
   /* ---------------- Status → Class grouping ---------------- */
-  statuses.forEach(status => {
+  JOB_STATUSES.forEach(status => {
+    const statusJobs = visibleJobs.filter(job => job.category === status);
+    if (statusJobs.length === 0) return;
+
     const statusSection = document.createElement('div');
     statusSection.className = 'job-category-section';
 
     const statusHeader = document.createElement('div');
     statusHeader.className = 'job-category-header';
     statusHeader.textContent = status;
-    statusHeader.onclick = () => statusSection.classList.toggle('collapsed');
+    makeKeyboardClickable(statusHeader, () => statusSection.classList.toggle('collapsed'));
 
     const statusList = document.createElement('div');
     statusList.className = 'job-category-list';
 
-    classes.forEach(cls => {
-      const jobsInGroup = data.jobs.filter(
-        j => j.category === status && j.classification === cls
+    JOB_CLASSES.forEach(cls => {
+      const jobsInGroup = statusJobs.filter(
+        j => j.classification === cls
       );
 
       if (jobsInGroup.length === 0) return;
@@ -387,7 +457,7 @@ export function renderJobs() {
       const classHeader = document.createElement('div');
       classHeader.className = 'job-class-header';
       classHeader.textContent = cls;
-      classHeader.onclick = () => classBlock.classList.toggle('collapsed');
+      makeKeyboardClickable(classHeader, () => classBlock.classList.toggle('collapsed'));
 
       const classList = document.createElement('div');
       classList.className = 'job-class-list';
@@ -430,10 +500,24 @@ export function renderEmployees() {
   employeesListEl.innerHTML = '';
 
   const weekKey = getCurrentWeekKey();
-  const districts = ['Electrical', 'Instrumentation', 'Flex'];
+  const query = document.getElementById('employeeSearchInput')?.value.trim().toLowerCase() || '';
+  const visibleEmployees = query
+    ? data.employees.filter(employee => employee.name.toLowerCase().includes(query)
+      || employee.district.toLowerCase().includes(query))
+    : data.employees;
 
-  districts.forEach(district => {
-    const employeesInDistrict = data.employees.filter(e => e.district === district);
+  if (visibleEmployees.length === 0) {
+    employeesListEl.appendChild(createEmptyState(
+      data.employees.length === 0 ? 'No employees yet' : 'No employees match your search',
+      data.employees.length === 0
+        ? 'Add the first team member above to begin planning.'
+        : 'Try a different employee or district name.'
+    ));
+    return;
+  }
+
+  DISTRICTS.forEach(district => {
+    const employeesInDistrict = visibleEmployees.filter(e => e.district === district);
     if (employeesInDistrict.length === 0) return;
 
     const header = document.createElement('div');
@@ -449,13 +533,25 @@ export function renderEmployees() {
       const headerRow = document.createElement('div');
       headerRow.className = 'employee-header';
 
-      const nameSpan = document.createElement('span');
-      nameSpan.className = 'employee-name';
-      nameSpan.textContent = emp.name;
+      const nameInput = document.createElement('input');
+      nameInput.className = 'employee-name';
+      nameInput.value = emp.name;
+      nameInput.setAttribute('aria-label', 'Employee name');
+      nameInput.addEventListener('change', () => {
+        const nextName = nameInput.value.trim();
+        if (!nextName) {
+          nameInput.value = emp.name;
+          showToast('Employee name cannot be empty.');
+          return;
+        }
+        emp.name = nextName;
+        scheduleSave();
+      });
 
       const districtSpan = document.createElement('span');
       const districtSelect = document.createElement('select');
-      ['Electrical', 'Instrumentation', 'Flex'].forEach(d => {
+      districtSelect.setAttribute('aria-label', `District for ${emp.name}`);
+      DISTRICTS.forEach(d => {
         const opt = document.createElement('option');
         opt.value = d;
         opt.textContent = d;
@@ -474,26 +570,56 @@ export function renderEmployees() {
 
       const budgetSpan = document.createElement('span');
       budgetSpan.className = 'employee-budget';
-      budgetSpan.textContent = `Allocated: ${total}/${emp.weeklyBudget} hrs`;
+      budgetSpan.textContent = `${formatHours(total)} / `;
+
+      const capacityInput = document.createElement('input');
+      capacityInput.type = 'number';
+      capacityInput.min = '0.25';
+      capacityInput.step = '0.25';
+      capacityInput.value = emp.weeklyBudget;
+      capacityInput.setAttribute('aria-label', `Weekly capacity for ${emp.name}`);
+      capacityInput.addEventListener('change', () => {
+        const value = Number(capacityInput.value);
+        if (!Number.isFinite(value) || value <= 0) {
+          capacityInput.value = emp.weeklyBudget;
+          showToast('Weekly capacity must be greater than zero.');
+          return;
+        }
+        emp.weeklyBudget = value;
+        renderEmployees();
+        forceChartUpdate();
+        scheduleSave();
+      });
+      const capacityUnit = document.createElement('span');
+      capacityUnit.textContent = ' hrs';
+      budgetSpan.append(capacityInput, capacityUnit);
 
       const toggleBtn = document.createElement('button');
-      toggleBtn.textContent = 'Toggle';
+      toggleBtn.className = 'icon-button';
+      toggleBtn.textContent = emp.collapsed ? '▸' : '▾';
+      toggleBtn.title = `${emp.collapsed ? 'Expand' : 'Collapse'} ${emp.name}`;
+      toggleBtn.setAttribute('aria-label', toggleBtn.title);
       toggleBtn.onclick = () => {
         emp.collapsed = !emp.collapsed;
         card.classList.toggle('collapsed');
+        toggleBtn.textContent = emp.collapsed ? '▸' : '▾';
+        scheduleSave();
       };
 
       const removeBtn = document.createElement('button');
-      removeBtn.textContent = 'Remove';
+      removeBtn.className = 'icon-button danger-button';
+      removeBtn.textContent = '×';
+      removeBtn.title = `Remove ${emp.name}`;
+      removeBtn.setAttribute('aria-label', removeBtn.title);
       removeBtn.onclick = () => removeEmployee(emp.id);
 
-      headerRow.append(nameSpan, districtSpan, budgetSpan, toggleBtn, removeBtn);
+      headerRow.append(nameInput, districtSpan, budgetSpan, toggleBtn, removeBtn);
 
       /* ---------------- Gauge ---------------- */
       const gaugeLabel = document.createElement('div');
       gaugeLabel.className = 'gauge-label';
       const pct = emp.weeklyBudget > 0 ? Math.round((total / emp.weeklyBudget) * 100) : 0;
-      gaugeLabel.textContent = `Usage: ${pct}%`;
+      gaugeLabel.textContent = `${pct}% utilized · ${formatHours(Math.max(0, emp.weeklyBudget - total))} hrs available`;
 
       const gauge = document.createElement('div');
       gauge.className = 'gauge';
@@ -583,6 +709,35 @@ export function renderEmployees() {
       const dropzone = document.createElement('div');
       dropzone.className = 'employee-dropzone';
       dropzone.dataset.employeeId = emp.id;
+      dropzone.setAttribute('aria-label', `Assignments for ${emp.name}`);
+
+      const assignmentControls = document.createElement('div');
+      assignmentControls.className = 'assignment-controls';
+      const projectSelect = document.createElement('select');
+      projectSelect.setAttribute('aria-label', `Project to assign to ${emp.name}`);
+      const placeholderOption = document.createElement('option');
+      placeholderOption.value = '';
+      placeholderOption.textContent = 'Choose a project…';
+      projectSelect.appendChild(placeholderOption);
+      data.jobs
+        .filter(job => !getEmployeeAssignmentsForWeek(weekKey, emp.id)[job.id])
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .forEach(job => {
+          const option = document.createElement('option');
+          option.value = job.id;
+          option.textContent = job.name;
+          projectSelect.appendChild(option);
+        });
+      const assignButton = document.createElement('button');
+      assignButton.textContent = 'Assign';
+      assignButton.disabled = projectSelect.options.length === 1;
+      assignButton.addEventListener('click', () => {
+        if (projectSelect.value) addAssignment(weekKey, emp.id, projectSelect.value);
+      });
+      projectSelect.addEventListener('change', () => {
+        assignButton.disabled = !projectSelect.value;
+      });
+      assignmentControls.append(projectSelect, assignButton);
 
       dropzone.addEventListener('dragover', e => {
         e.preventDefault();
@@ -609,7 +764,7 @@ export function renderEmployees() {
         // Subtask dropped
         if (payload?.kind === 'subtask') {
           const { jobId, subtaskId, name, category, color } = payload;
-          const empAssignments = getEmployeeAssignmentsForWeek(weekKey, emp.id);
+          const empAssignments = ensureEmployeeAssignmentsForWeek(weekKey, emp.id);
 
           if (!empAssignments[jobId]) {
             empAssignments[jobId] = { hours: 0, subtasks: [] };
@@ -664,12 +819,19 @@ export function renderEmployees() {
         hoursInput.min = '0';
         hoursInput.step = '0.25';
         hoursInput.value = assignment.hours || 0;
-        hoursInput.onchange = () => {
-          updateAssignmentHours(weekKey, emp.id, jobId, parseFloat(hoursInput.value) || 0);
+        hoursInput.setAttribute('aria-label', `${job.name} hours for ${emp.name}`);
+        hoursInput.oninput = () => {
+          assignment.hours = Math.max(0, Number(hoursInput.value) || 0);
+          forceChartUpdate();
+          scheduleSave();
         };
+        hoursInput.onchange = renderEmployees;
 
         const removeAssignBtn = document.createElement('button');
-        removeAssignBtn.textContent = 'X';
+        removeAssignBtn.className = 'icon-button danger-button';
+        removeAssignBtn.textContent = '×';
+        removeAssignBtn.title = `Remove ${job.name} from ${emp.name}`;
+        removeAssignBtn.setAttribute('aria-label', removeAssignBtn.title);
         removeAssignBtn.onclick = () => removeAssignment(weekKey, emp.id, jobId);
 
         top.append(label, hoursInput, removeAssignBtn);
@@ -697,11 +859,13 @@ export function renderEmployees() {
           subHours.min = '0';
           subHours.step = '0.25';
           subHours.value = sub.hours || 0;
-          subHours.onchange = () => {
-            sub.hours = parseFloat(subHours.value) || 0;
-            renderEmployees();
+          subHours.setAttribute('aria-label', `${sub.name} hours for ${emp.name}`);
+          subHours.oninput = () => {
+            sub.hours = Math.max(0, Number(subHours.value) || 0);
             forceChartUpdate();
+            scheduleSave();
           };
+          subHours.onchange = renderEmployees;
 
           let colorEl;
           if (!sub.sourceId) {
@@ -724,7 +888,10 @@ export function renderEmployees() {
           }
 
           const del = document.createElement('button');
-          del.textContent = 'X';
+          del.className = 'icon-button danger-button';
+          del.textContent = '×';
+          del.title = `Remove ${sub.name}`;
+          del.setAttribute('aria-label', del.title);
           del.onclick = () => {
             assignment.subtasks.splice(index, 1);
             renderEmployees();
@@ -752,7 +919,8 @@ export function renderEmployees() {
             assignment.subtasks.push({
               name: subInput.value.trim(),
               hours: 0,
-              color: job.color || DEFAULT_COLOR
+              color: job.color || DEFAULT_COLOR,
+              category: 'Other'
             });
             subInput.value = '';
             renderEmployees();
@@ -763,11 +931,19 @@ export function renderEmployees() {
 
         subInputRow.append(subInputLabel, subInput);
 
-        row.append(top, subInputRow, subList);
+        const subtaskTotal = assignment.subtasks.reduce((sum, subtask) => sum + (Number(subtask.hours) || 0), 0);
+        if (subtaskTotal > assignment.hours) {
+          const warning = document.createElement('div');
+          warning.className = 'inline-warning';
+          warning.textContent = `Subtasks total ${formatHours(subtaskTotal)} hrs, above the ${formatHours(assignment.hours)} project total.`;
+          row.append(top, warning, subInputRow, subList);
+        } else {
+          row.append(top, subInputRow, subList);
+        }
         dropzone.appendChild(row);
       });
 
-      card.append(headerRow, gaugeLabel, gauge, dropzone);
+      card.append(headerRow, gaugeLabel, gauge, assignmentControls, dropzone);
       employeesListEl.appendChild(card);
     });
   });
@@ -777,6 +953,8 @@ export function renderEmployees() {
    Assignment helpers (UI wrappers)
 ------------------------------------------------------- */
 export function addAssignment(weekKey, empId, jobId) {
+  if (!data.employees.some(employee => employee.id === empId)
+    || !data.jobs.some(job => job.id === jobId)) return;
   ensureAssignment(weekKey, empId, jobId);
   renderEmployees();
   forceChartUpdate();
@@ -823,6 +1001,7 @@ export function downloadCsv(rows, filename) {
    Resizable Columns
 ------------------------------------------------------- */
 export function makeResizable(divider, leftCol, rightCol) {
+  if (!divider || !leftCol || !rightCol || window.matchMedia('(max-width: 900px)').matches) return;
   let dragging = false;
 
   divider.addEventListener('mousedown', () => dragging = true);
@@ -867,5 +1046,31 @@ export function makeResizable(divider, leftCol, rightCol) {
     }
 
     forceChartUpdate();
+  });
+}
+
+function createEmptyState(title, description) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'empty-state';
+  const heading = document.createElement('strong');
+  heading.textContent = title;
+  const body = document.createElement('span');
+  body.textContent = description;
+  wrapper.append(heading, body);
+  return wrapper;
+}
+
+function formatHours(value) {
+  return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function makeKeyboardClickable(element, action) {
+  element.setAttribute('role', 'button');
+  element.tabIndex = 0;
+  element.addEventListener('click', action);
+  element.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    action();
   });
 }
