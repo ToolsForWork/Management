@@ -34,6 +34,10 @@
         </div>
 
         <div class="header-actions">
+            <button type="button" id="workspaceBtn" class="workspace-btn">
+                Workspace
+                <span id="workspaceAlertBadge" class="alert-badge hidden" aria-label="Management alerts"></span>
+            </button>
             <button type="button" id="fileBtn" class="file-btn" aria-haspopup="menu" aria-expanded="false">Data</button>
 
             <div id="fileMenu" class="file-menu hidden" role="menu">
@@ -145,6 +149,42 @@
         </section>
 
     </div>
+
+    <div id="workspaceOverlay" class="workspace-overlay hidden" role="dialog" aria-modal="true"
+        aria-labelledby="workspaceTitle">
+        <div class="workspace-header">
+            <div>
+                <p class="eyebrow">Management workspace</p>
+                <h2 id="workspaceTitle">Team operations</h2>
+            </div>
+            <button type="button" id="closeWorkspaceBtn" class="workspace-close" aria-label="Close workspace">×</button>
+        </div>
+        <nav id="workspaceTabs" class="workspace-tabs" aria-label="Management workspace">
+            <button type="button" data-workspace-tab="overview" class="active">Overview</button>
+            <button type="button" data-workspace-tab="projects">Projects</button>
+            <button type="button" data-workspace-tab="tasks">Tasks</button>
+            <button type="button" data-workspace-tab="people">People</button>
+            <button type="button" data-workspace-tab="activity">Activity</button>
+        </nav>
+        <main id="workspaceContent" class="workspace-content"></main>
+    </div>
+
+    <dialog id="managementDialog" class="management-dialog" aria-labelledby="dialogTitle">
+        <form id="managementForm" method="dialog">
+            <div class="dialog-heading">
+                <div>
+                    <p id="dialogEyebrow" class="eyebrow">Management workspace</p>
+                    <h2 id="dialogTitle">Edit</h2>
+                </div>
+                <button type="button" id="closeManagementDialogBtn" class="icon-button" aria-label="Close">×</button>
+            </div>
+            <div id="dialogFields" class="dialog-fields"></div>
+            <div class="dialog-actions">
+                <button type="button" id="cancelManagementDialogBtn" class="secondary-button">Cancel</button>
+                <button type="submit" id="saveManagementDialogBtn">Save</button>
+            </div>
+        </form>
+    </dialog>
 
     <div id="plannerToast" role="status" aria-live="polite"></div>
     <div id="autoSaveIndicator" role="status">✓ Saved locally</div>
