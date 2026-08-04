@@ -1,0 +1,13 @@
+{
+  "name": "management-team-api",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.7.0",
+    "@azure/storage-blob": "^12.28.0"
+  }
+}
