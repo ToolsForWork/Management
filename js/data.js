@@ -567,6 +567,9 @@ export function saveToLocalStorage() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(createSnapshot()));
     showSavedIndicator();
+    if (typeof document !== 'undefined') {
+      document.dispatchEvent(new CustomEvent('planner:localsave'));
+    }
     return true;
   } catch (error) {
     console.warn('Auto-save failed:', error);

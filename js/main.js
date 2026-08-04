@@ -31,6 +31,7 @@ import { initializeWorkspace, refreshWorkspaceSummary } from './workspace.js';
 import { initializeVerifiedIdentity } from './auth.js';
 import { autoLoadRoster } from './roster.js';
 import { autoLoadActionItems } from './actionItems.js';
+import { initializeTeamSync, refreshTeamData } from './sync.js';
 
 const THEME_KEY = 'planner-theme';
 
@@ -49,6 +50,7 @@ async function initialize() {
   if (!tryLoadFromHash(showToast)) loadFromLocalStorage();
   await autoLoadRoster();
   await autoLoadActionItems();
+  await initializeTeamSync({ renderAll, showToast });
   const verifiedIdentity = await initializeVerifiedIdentity(data.employees);
   if (verifiedIdentity) data.currentUserId = verifiedIdentity.employeeId;
   wireMenus();
@@ -195,6 +197,7 @@ function wireFileActions() {
   document.getElementById('exportAllCsvBtn').addEventListener('click', exportAllWeeksCsv);
   document.getElementById('exportJsonBtn').addEventListener('click', exportJson);
   document.getElementById('copyShareLinkBtn').addEventListener('click', copyShareLink);
+  document.getElementById('refreshSharedBtn').addEventListener('click', refreshTeamData);
   document.getElementById('importBtn').addEventListener('click', () => {
     document.getElementById('importJsonInput').click();
   });

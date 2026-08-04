@@ -725,19 +725,37 @@ function renderRoster() {
   const heading = viewHeading('Department roster', 'DM → ADM → Estimator reporting structure. Project leads are derived from project ownership.');
   if (canAddRosterMember()) heading.appendChild(actionButton('Add roster member', () => openRosterForm()));
   if (canAddRosterMember()) heading.appendChild(actionButton('Import roster CSV', importRosterCsv, 'secondary-button'));
-  heading.appendChild(actionButton('Roster CSV template', () => window.open('./data/roster.csv', '_blank', 'noopener'), 'secondary-button'));
+  heading.appendChild(actionButton('Roster CSV template', downloadRosterTemplate, 'secondary-button'));
   wrapper.appendChild(heading);
-  if (!data.employees.length) {
+  const active = activeEmployees();
+  if (!active.length) {
     wrapper.appendChild(emptyState('Build the department roster', 'Add the DM first, then add each reporting level.'));
-    return wrapper;
+  } else {
+    const tree = element('div', 'roster-tree');
+    const activeIds = new Set(active.map(employee => employee.id));
+    const roots = active
+      .filter(employee => !employee.managerId || !activeIds.has(employee.managerId))
+      .sort(rosterComparator);
+    roots.forEach(employee => tree.appendChild(rosterBranch(employee, new Set())));
+    wrapper.appendChild(tree);
   }
-  const tree = element('div', 'roster-tree');
-  const activeIds = new Set(data.employees.map(employee => employee.id));
-  const roots = data.employees
-    .filter(employee => !employee.managerId || !activeIds.has(employee.managerId))
-    .sort(rosterComparator);
-  roots.forEach(employee => tree.appendChild(rosterBranch(employee, new Set())));
-  wrapper.appendChild(tree);
+
+  const removed = data.employees.filter(employee => employee.active === false && canRestoreRosterMember(employee));
+  if (removed.length) {
+    const details = element('details', 'removed-roster-members');
+    details.appendChild(element('summary', '', `Removed roster members · ${removed.length}`));
+    const list = element('div', 'removed-roster-list');
+    removed.sort((left, right) => left.name.localeCompare(right.name)).forEach(employee => {
+      const row = element('div', 'removed-roster-row');
+      row.append(
+        element('span', '', `${employee.name} · ${employee.rosterRole} · ${employee.district}`),
+        actionButton('Restore', () => restoreRosterMember(employee), 'secondary-button')
+      );
+      list.appendChild(row);
+    });
+    details.appendChild(list);
+    wrapper.appendChild(details);
+  }
   return wrapper;
 }
 
@@ -745,17 +763,22 @@ function rosterBranch(employee, visited) {
   const branch = element('div', 'roster-branch');
   if (visited.has(employee.id)) return branch;
   const nextVisited = new Set(visited).add(employee.id);
-  const card = element('article', `roster-card${employee.active === false ? ' archived' : ''}`);
+  const card = element('article', 'roster-card');
   const identity = element('div', 'person-identity');
   identity.append(avatar(employee.name), element('div'));
   identity.lastChild.append(
     element('h3', '', employee.name),
     element('span', '', `${getViewerLevel(employee.id)} · ${employee.rosterRole} roster role · ${employee.district}`)
   );
-  card.append(identity, chip(employee.active === false ? 'Archived' : `${formatHours(employee.weeklyBudget)}h`, 'chip-neutral'));
-  if (canEditRosterMember(employee)) card.appendChild(actionButton('Edit', () => openRosterForm(employee), 'secondary-button'));
+  card.append(identity, chip(`${formatHours(employee.weeklyBudget)}h`, 'chip-neutral'));
+  if (canEditRosterMember(employee)) {
+    card.append(
+      actionButton('Edit', () => openRosterForm(employee), 'secondary-button'),
+      actionButton('Remove', () => removeRosterMember(employee), 'danger-button')
+    );
+  }
   branch.appendChild(card);
-  const reports = data.employees.filter(candidate => candidate.managerId === employee.id).sort(rosterComparator);
+  const reports = activeEmployees().filter(candidate => candidate.managerId === employee.id).sort(rosterComparator);
   if (reports.length) {
     const children = element('div', 'roster-children');
     reports.forEach(report => children.appendChild(rosterBranch(report, nextVisited)));
@@ -1069,7 +1092,7 @@ function openRosterForm(employee = null) {
   const actor = currentActor();
   const editing = Boolean(employee);
   if (editing && !canEditRosterMember(employee)) return;
-  const permittedRoles = isSetupMode()
+  const permittedRoles = isSetupMode() || actor?.rosterRole === 'DM'
     ? ORG_ROLES
     : ORG_ROLES.filter(role => roleRank(role) < roleRank(actor?.rosterRole));
   if (editing && !permittedRoles.includes(employee.rosterRole)) permittedRoles.unshift(employee.rosterRole);
@@ -1104,6 +1127,12 @@ function openRosterForm(employee = null) {
         showToast('That reporting line would create a hierarchy cycle.');
         return false;
       }
+      const invalidReport = employee && activeEmployees().find(candidate =>
+        candidate.managerId === employee.id && roleRank(candidate.rosterRole) >= roleRank(values.rosterRole));
+      if (invalidReport) {
+        showToast(`${invalidReport.name} must report to someone above their hierarchy role.`);
+        return false;
+      }
       if (editing) {
         Object.assign(employee, values);
         commit('Roster', `${employee.name}'s roster placement updated.`, 'employee', employee.id);
@@ -1124,6 +1153,65 @@ function openRosterForm(employee = null) {
       return true;
     }
   });
+}
+
+function removeRosterMember(employee) {
+  const actor = currentActor();
+  if (!canEditRosterMember(employee)) return;
+  if (actor?.id === employee.id) {
+    showToast('You cannot remove your own active roster identity. Assign another DM first.');
+    return;
+  }
+  if (!window.confirm(`Remove ${employee.name} from the active roster? Their history will be preserved and they can be restored later.`)) return;
+
+  const replacementManager = employeeById(employee.managerId);
+  activeEmployees()
+    .filter(candidate => candidate.managerId === employee.id)
+    .forEach(candidate => {
+      candidate.managerId = replacementManager
+        && roleRank(replacementManager.rosterRole) > roleRank(candidate.rosterRole)
+        ? replacementManager.id
+        : '';
+    });
+  data.tasks.forEach(task => {
+    if (task.assigneeId !== employee.id || task.progress >= 100) return;
+    task.sourceAssigneeName = employee.name;
+    task.assigneeId = '';
+    if (task.status === 'In progress') task.status = 'To do';
+    task.updatedAt = new Date().toISOString();
+  });
+  data.jobs.forEach(project => {
+    if (project.ownerId === employee.id && project.category !== 'Complete') project.ownerId = '';
+  });
+  const currentWeek = getCurrentWeekKey();
+  Object.entries(data.assignments).forEach(([weekKey, week]) => {
+    if (weekKey >= currentWeek) delete week[employee.id];
+  });
+  employee.active = false;
+  employee.archivedAt = new Date().toISOString();
+  commit('Roster', `${employee.name} removed from the active roster.`, 'employee', employee.id);
+  renderWorkspace();
+}
+
+function restoreRosterMember(employee) {
+  if (!canRestoreRosterMember(employee)) return;
+  const manager = employeeById(employee.managerId);
+  if (manager?.active === false || (manager && roleRank(manager.rosterRole) <= roleRank(employee.rosterRole))) {
+    employee.managerId = '';
+  }
+  employee.active = true;
+  employee.archivedAt = '';
+  commit('Roster', `${employee.name} restored to the active roster.`, 'employee', employee.id);
+  renderWorkspace();
+}
+
+function downloadRosterTemplate() {
+  const link = document.createElement('a');
+  link.href = './data/roster-template.csv';
+  link.download = 'roster-template.csv';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 function openProfileForm(employee) {
@@ -1680,6 +1768,14 @@ function canEditRosterMember(employee) {
   if (!actor) return false;
   if (actor.id === employee.id) return actor.rosterRole === 'DM';
   return actor.rosterRole === 'DM' || getEmployeeDescendantIds(actor.id).has(employee.id);
+}
+
+function canRestoreRosterMember(employee) {
+  if (isSetupMode()) return true;
+  const actor = currentActor();
+  if (!actor) return false;
+  if (actor.rosterRole === 'DM') return true;
+  return actor.rosterRole === 'ADM' && employee.managerId === actor.id;
 }
 
 function rosterComparator(left, right) {
