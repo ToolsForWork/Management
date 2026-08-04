@@ -18,6 +18,7 @@ import {
   totalHoursForEmployeeWeek,
   getEffectiveEmployeeCapacity,
   createDefaultProjectChecklist,
+  ensureProjectTakeoffActions,
   recordActivity,
   scheduleSave
 } from './data.js';
@@ -51,7 +52,7 @@ export function addJob(name, category, jobClass, color) {
   }
   const resolvedColor = color || pickUnusedColor();
 
-  data.jobs.push({
+  const project = {
     id: uuid(),
     name: normalizedName,
     category: JOB_STATUSES.includes(category) ? category : 'Other',
@@ -62,16 +63,19 @@ export function addJob(name, category, jobClass, color) {
     subtaskGroupCollapsed: {},
     hoursBudget: 0,
     ownerId: '',
-    discipline: DEFAULT_DISTRICT,
+    discipline: 'E&I',
+    checklistOpen: false,
     checklist: createDefaultProjectChecklist(),
     priority: 'Medium',
     health: category === 'Complete' ? 'Complete' : 'On track',
     startDate: '',
     dueDate: '',
     description: ''
-  });
+  };
+  data.jobs.push(project);
+  ensureProjectTakeoffActions(project);
 
-  recordActivity('Project', `${normalizedName} created.`, 'project', data.jobs[data.jobs.length - 1].id);
+  recordActivity('Project', `${normalizedName} created with required takeoff actions.`, 'project', project.id);
   renderJobs();
   forceChartUpdate();
   scheduleSave();

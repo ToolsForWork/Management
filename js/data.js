@@ -380,6 +380,52 @@ export function createDefaultProjectChecklist() {
   ];
 }
 
+export function ensureProjectTakeoffActions(project, tasks = data.tasks) {
+  const created = [];
+  (project?.checklist || []).filter(item => item.type === 'Takeoff').forEach(item => {
+    const normalizedTitle = `${item.name} takeoff`;
+    const existing = tasks.find(task => task.projectId === project.id
+      && (task.sourceChecklistId === item.id
+        || task.title.toLowerCase() === normalizedTitle.toLowerCase()
+        || task.title.toLowerCase() === item.name.toLowerCase()));
+    if (existing) {
+      existing.sourceType = 'Takeoff';
+      existing.sourceChecklistId = item.id;
+      if (!existing.workGroup) existing.workGroup = item.discipline;
+      if (!existing.wbs) existing.wbs = DEFAULT_WBS;
+      if (!existing.io) existing.io = DEFAULT_IO[item.discipline] || DEFAULT_IO.Electrical;
+      return;
+    }
+    const now = new Date().toISOString();
+    created.push({
+      id: uuid(),
+      title: normalizedTitle,
+      projectId: project.id,
+      assigneeId: '',
+      status: 'To do',
+      priority: 'Medium',
+      dueDate: project.dueDate || '',
+      description: `Required ${item.discipline} takeoff for ${project.name}. Set the estimated hours before assignment.`,
+      budgetHours: 0,
+      wbs: DEFAULT_WBS,
+      io: DEFAULT_IO[item.discipline] || DEFAULT_IO.Electrical,
+      workGroup: item.discipline,
+      plannedWeekKey: '',
+      progress: item.complete ? 100 : 0,
+      scopeOwnerId: project.ownerId || '',
+      assignedById: '',
+      sourceType: 'Takeoff',
+      sourceChecklistId: item.id,
+      workLogs: [],
+      notes: [],
+      createdAt: now,
+      updatedAt: now
+    });
+  });
+  tasks.push(...created);
+  return created;
+}
+
 export function getViewerLevel(employeeId) {
   const employee = data.employees.find(candidate => candidate.id === employeeId && candidate.active !== false);
   if (!employee) return 'Estimator';
@@ -422,6 +468,11 @@ export function isEmployeeBelow(managerId, employeeId) {
   return getEmployeeDescendantIds(managerId).has(employeeId);
 }
 
+export function isInManagerDistrict(manager, employee) {
+  if (!manager || !employee) return false;
+  return manager.district === 'E&I' || manager.district === employee.district;
+}
+
 export function canManageActionItem(actorId, task) {
   const actor = data.employees.find(employee => employee.id === actorId && employee.active !== false);
   if (!actor) return false;
@@ -429,24 +480,33 @@ export function canManageActionItem(actorId, task) {
   const project = data.jobs.find(job => job.id === task?.projectId);
   if (actor.rosterRole === 'Estimator') return Boolean(project && project.ownerId === actor.id);
   const scopeOwnerId = project?.ownerId || task?.scopeOwnerId || '';
-  if (!scopeOwnerId) return false;
-  return scopeOwnerId === actor.id || isEmployeeBelow(actor.id, scopeOwnerId);
+  const scopeOwner = data.employees.find(employee => employee.id === scopeOwnerId);
+  if (scopeOwner && isInManagerDistrict(actor, scopeOwner)
+    && (scopeOwnerId === actor.id || isEmployeeBelow(actor.id, scopeOwnerId))) return true;
+  return Boolean(project && data.tasks.some(candidate => {
+    if (candidate.projectId !== project.id || !candidate.assigneeId) return false;
+    const assignee = data.employees.find(employee => employee.id === candidate.assigneeId);
+    return assignee && isInManagerDistrict(actor, assignee)
+      && (assignee.id === actor.id || isEmployeeBelow(actor.id, assignee.id));
+  }));
 }
 
 export function canAssignActionItem(actorId, targetEmployeeId, task) {
   const actor = data.employees.find(employee => employee.id === actorId && employee.active !== false);
   const target = data.employees.find(employee => employee.id === targetEmployeeId && employee.active !== false);
   if (!actor || !target) return false;
+  if (task?.sourceType === 'Takeoff' && toNonNegativeNumber(task?.budgetHours) <= 0) return false;
   if (actor.id === target.id) return !task.assigneeId || task.assigneeId === actor.id;
   if (!canManageActionItem(actorId, task)) return false;
   if (actor.rosterRole === 'Estimator') {
     const project = data.jobs.find(job => job.id === task.projectId);
     return Boolean(project?.ownerId === actor.id
       && target.rosterRole === 'Estimator'
+      && isInManagerDistrict(actor, target)
       && target.managerId
       && target.managerId === actor.managerId);
   }
-  return isEmployeeBelow(actor.id, target.id);
+  return isInManagerDistrict(actor, target) && isEmployeeBelow(actor.id, target.id);
 }
 
 export function canWorkActionItem(actorId, task) {
@@ -527,6 +587,7 @@ export function loadFromLocalStorage() {
 }
 
 export function scheduleSave() {
+  if (typeof localStorage === 'undefined') return;
   clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(saveToLocalStorage, 400);
 }
@@ -627,6 +688,7 @@ function normalizeSnapshot(snapshot) {
     ? new Date(`${currentWeekValue}T12:00:00`)
     : snapshot.currentWeekStart ? new Date(snapshot.currentWeekStart) : new Date();
   const tasks = normalizeArray(snapshot.tasks, item => normalizeTask(item, employeeIds, jobIds));
+  jobs.forEach(job => ensureProjectTakeoffActions(job, tasks));
   const timeOff = normalizeArray(snapshot.timeOff, item => normalizeTimeOff(item, employeeIds));
   const checkIns = normalizeArray(snapshot.checkIns, item => normalizeCheckIn(item, employeeIds));
   const goals = normalizeArray(snapshot.goals, item => normalizeGoal(item, employeeIds));
@@ -702,7 +764,8 @@ function normalizeJob(job, index, employeeIds) {
     subtaskGroupCollapsed: normalizeCollapsedGroups(job.subtaskGroupCollapsed),
     hoursBudget: toNonNegativeNumber(job.hoursBudget),
     ownerId: typeof job.ownerId === 'string' && employeeIds.has(job.ownerId) ? job.ownerId : '',
-    discipline: DISTRICTS.includes(job.discipline) ? job.discipline : DEFAULT_DISTRICT,
+    discipline: 'E&I',
+    checklistOpen: Boolean(job.checklistOpen),
     checklist: Array.isArray(job.checklist) && job.checklist.length
       ? job.checklist.map(item => normalizeChecklistItem(item, employeeIds)).filter(Boolean)
       : createDefaultProjectChecklist(),
@@ -785,6 +848,22 @@ function normalizeTask(task, employeeIds, jobIds) {
     assignedById: typeof task.assignedById === 'string' && employeeIds.has(task.assignedById)
       ? task.assignedById
       : '',
+    sourceType: ['Takeoff', 'Initiative'].includes(task.sourceType) ? task.sourceType : '',
+    sourceChecklistId: typeof task.sourceChecklistId === 'string' ? task.sourceChecklistId : '',
+    externalId: String(task.externalId || '').trim(),
+    sourceItemNumber: String(task.sourceItemNumber || '').trim(),
+    initiative: String(task.initiative || '').trim(),
+    discipline: String(task.discipline || '').trim(),
+    category: String(task.category || '').trim(),
+    deliverable: String(task.deliverable || '').trim(),
+    reviewerName: String(task.reviewerName || '').trim(),
+    reviewerId: typeof task.reviewerId === 'string' && employeeIds.has(task.reviewerId) ? task.reviewerId : '',
+    sourceStatus: String(task.sourceStatus || '').trim(),
+    sourceNotes: String(task.sourceNotes || '').trim(),
+    sourceAssigneeName: String(task.sourceAssigneeName || '').trim(),
+    sourceDue: String(task.sourceDue || '').trim(),
+    dueQuarter: String(task.dueQuarter || '').trim(),
+    priorityWeight: toNonNegativeNumber(task.priorityWeight),
     workLogs: normalizeArray(task.workLogs, log => normalizeTaskWorkLog(log, employeeIds)),
     notes: normalizeArray(task.notes, note => normalizeTaskNote(note, employeeIds)),
     createdAt: normalizeTimestamp(task.createdAt),

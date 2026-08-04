@@ -19,6 +19,7 @@ import {
   canAssignActionItem,
   canWorkActionItem,
   getEmployeeDescendantIds,
+  isInManagerDistrict,
   getTaskActualHours,
   getTaskVariance,
   getViewerLevel,
@@ -29,6 +30,8 @@ import {
 import { showToast, renderJobs, renderEmployees } from './ui.js';
 import { forceChartUpdate } from './charts.js';
 import { getVerifiedIdentity } from './auth.js';
+import { applyRosterCsv } from './roster.js';
+import { applyActionItemsCsv } from './actionItems.js';
 
 let activeTab = 'overview';
 let dialogSubmit = null;
@@ -69,10 +72,12 @@ export function initializeWorkspace() {
 
 export function refreshWorkspaceSummary() {
   const badge = document.getElementById('workspaceAlertBadge');
-  const count = getAlerts().length;
-  badge.textContent = count > 99 ? '99+' : String(count);
-  badge.classList.toggle('hidden', count === 0);
-  badge.setAttribute('aria-label', `${count} management ${count === 1 ? 'alert' : 'alerts'}`);
+  const count = visibleAlerts().length;
+  badge.textContent = count ? (count > 99 ? '99+' : String(count)) : '✓';
+  badge.classList.toggle('attention', count > 0);
+  badge.setAttribute('aria-label', count
+    ? `${count} management ${count === 1 ? 'alert' : 'alerts'}`
+    : 'No management alerts');
 }
 
 export function renderWorkspace() {
@@ -138,7 +143,7 @@ function refreshIdentitySelector() {
 function permittedTabs() {
   if (isSetupMode()) return ['overview', 'projects', 'tasks', 'people', 'roster', 'activity'];
   const actor = currentActor();
-  if (!actor || getViewerLevel(actor.id) !== 'Manager') return ['overview', 'tasks'];
+  if (!actor || getViewerLevel(actor.id) !== 'Manager') return ['overview', 'projects', 'tasks'];
   return ['overview', 'projects', 'tasks', 'people', 'roster', 'activity'];
 }
 
@@ -250,7 +255,7 @@ function renderCompactTasks(employeeId) {
 }
 
 function renderAlerts() {
-  const alerts = getAlerts().slice(0, 8);
+  const alerts = visibleAlerts().slice(0, 8);
   if (!alerts.length) return emptyState('No active alerts', 'Capacity, deadlines, and assignment responses look healthy.');
   const list = element('div', 'workspace-list');
   alerts.forEach(alert => {
@@ -265,13 +270,14 @@ function renderAlerts() {
 }
 
 function renderDeadlines() {
+  const projectIds = new Set(visibleProjects().map(project => project.id));
   const items = [
-    ...data.jobs.filter(job => job.dueDate && job.category !== 'Complete').map(job => ({
+    ...data.jobs.filter(job => projectIds.has(job.id) && job.dueDate && job.category !== 'Complete').map(job => ({
       date: job.dueDate,
       title: job.name,
       meta: `Project · ${job.health}`
     })),
-    ...data.tasks.filter(task => task.dueDate && task.status !== 'Done').map(task => ({
+    ...data.tasks.filter(task => isTaskVisibleToViewer(task) && task.dueDate && task.status !== 'Done').map(task => ({
       date: task.dueDate,
       title: task.title,
       meta: `Action · ${task.status}`
@@ -292,12 +298,15 @@ function renderDeadlines() {
 }
 
 function renderApprovals() {
-  const pendingLeave = data.timeOff.filter(entry => entry.status === 'Pending');
+  const employeeIds = new Set(peopleBelowActor().map(employee => employee.id));
+  const pendingLeave = data.timeOff.filter(entry => employeeIds.has(entry.employeeId) && entry.status === 'Pending');
   const changeRequests = [];
   const week = data.assignments[getCurrentWeekKey()] || {};
   Object.entries(week).forEach(([employeeId, assignments]) => {
     Object.entries(assignments).forEach(([projectId, assignment]) => {
-      if (assignment.status === 'Needs change') changeRequests.push({ employeeId, projectId, assignment });
+      if (employeeIds.has(employeeId) && assignment.status === 'Needs change') {
+        changeRequests.push({ employeeId, projectId, assignment });
+      }
     });
   });
 
@@ -340,7 +349,7 @@ function renderProjects() {
   const wrapper = element('div', 'workspace-view');
   wrapper.append(viewHeading('Project portfolio', 'Ownership, health, priority, dates, and delivery context.'));
 
-  const projects = manageableProjects();
+  const projects = visibleProjects();
   if (!projects.length) {
     wrapper.appendChild(emptyState('No projects yet', 'Create projects in the planner, then manage delivery details here.'));
     return wrapper;
@@ -364,7 +373,10 @@ function projectCard(project) {
   const heading = element('div', 'portfolio-card-heading');
   const title = element('div');
   title.append(element('h3', '', project.name), element('span', '', owner ? `Project lead: ${owner.name}` : 'Project lead not assigned'));
-  heading.append(title, actionButton('Edit details', () => openProjectForm(project), 'secondary-button'));
+  heading.appendChild(title);
+  if (canEditProject(project)) {
+    heading.appendChild(actionButton('Edit details', () => openProjectForm(project), 'secondary-button'));
+  }
   const chips = element('div', 'chip-row');
   chips.append(chip(project.health || 'On track', healthClass(project.health)), chip(project.priority || 'Medium', priorityClass(project.priority)));
   if (project.dueDate) chips.appendChild(chip(`Due ${project.dueDate}`, 'chip-neutral'));
@@ -400,6 +412,11 @@ function projectCard(project) {
 
 function projectChecklist(project) {
   const details = element('details', 'project-checklist');
+  details.open = Boolean(project.checklistOpen);
+  details.addEventListener('toggle', () => {
+    project.checklistOpen = details.open;
+    scheduleSave();
+  });
   const complete = project.checklist.filter(item => item.complete).length;
   details.appendChild(element('summary', '', `Project checklist · ${complete}/${project.checklist.length}`));
   ['Procedure', 'Takeoff'].forEach(type => {
@@ -411,10 +428,20 @@ function projectChecklist(project) {
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.checked = item.complete;
+      checkbox.disabled = !canEditProject(project);
       checkbox.addEventListener('change', () => {
+        project.checklistOpen = true;
         item.complete = checkbox.checked;
         item.completedAt = checkbox.checked ? new Date().toISOString() : '';
         item.completedById = checkbox.checked ? currentActor()?.id || '' : '';
+        const takeoffTask = item.type === 'Takeoff'
+          ? data.tasks.find(task => task.projectId === project.id && task.sourceChecklistId === item.id)
+          : null;
+        if (takeoffTask) {
+          takeoffTask.progress = checkbox.checked ? 100 : 0;
+          takeoffTask.status = checkbox.checked ? 'Done' : 'To do';
+          takeoffTask.updatedAt = new Date().toISOString();
+        }
         commit('Project checklist', `${item.name} marked ${checkbox.checked ? 'complete' : 'incomplete'} for ${project.name}.`, 'project', project.id);
         renderWorkspace();
       });
@@ -429,7 +456,12 @@ function projectChecklist(project) {
 function renderTasks() {
   const wrapper = element('div', 'workspace-view');
   const heading = viewHeading('Action item list', 'Project and unutilized work, with charging codes, budgets, progress, and handoffs.');
-  if (canCreateActionItems()) heading.appendChild(actionButton('Add action', () => openTaskForm()));
+  if (canCreateActionItems()) {
+    heading.append(
+      actionButton('Add action', () => openTaskForm()),
+      actionButton('Import action items', importActionItemsCsv, 'secondary-button')
+    );
+  }
   wrapper.append(heading, renderHoursSummary(), renderAssignmentTargets());
 
   const controls = element('div', 'workspace-filters');
@@ -445,7 +477,8 @@ function renderTasks() {
     const query = search.input.value.trim().toLowerCase();
     const tasks = data.tasks
       .filter(task => isTaskVisibleToViewer(task))
-      .filter(task => !query || [task.title, task.description, task.wbs, task.io].some(value => String(value || '').toLowerCase().includes(query)))
+      .filter(task => !query || [task.title, task.description, task.wbs, task.io, task.initiative, task.discipline, task.category, task.deliverable, task.reviewerName, task.sourceAssigneeName]
+        .some(value => String(value || '').toLowerCase().includes(query)))
       .filter(task => !status.input.value || task.status === status.input.value)
       .filter(task => !owner.input.value || task.assigneeId === owner.input.value)
       .sort(taskComparator);
@@ -454,8 +487,9 @@ function renderTasks() {
       return;
     }
     list.append(
-      taskSection('Projects', tasks.filter(task => task.projectId), true),
-      taskSection('Unutilized', tasks.filter(task => !task.projectId), false)
+      taskSection('Projects', tasks.filter(task => task.projectId), 'project'),
+      taskSection('Initiatives', tasks.filter(task => !task.projectId && task.initiative), 'initiative'),
+      taskSection('Unutilized', tasks.filter(task => !task.projectId && !task.initiative), '')
     );
   };
   [search.input, status.input, owner.input].forEach(input => input.addEventListener('input', refresh));
@@ -492,9 +526,10 @@ function visibleHoursEmployees() {
       || (employee.rosterRole === 'Estimator' && employee.managerId === actor.managerId)
     );
   }
-  if (actor.rosterRole === 'DM') return activeEmployees();
   const ids = getEmployeeDescendantIds(actor.id);
-  return activeEmployees().filter(employee => employee.id === actor.id || ids.has(employee.id));
+  return activeEmployees().filter(employee =>
+    (employee.id === actor.id || ids.has(employee.id)) && isInManagerDistrict(actor, employee)
+  );
 }
 
 function isTaskVisibleToViewer(task) {
@@ -506,7 +541,7 @@ function isTaskVisibleToViewer(task) {
   return !task.assigneeId || task.assigneeId === actor.id;
 }
 
-function taskSection(title, tasks, groupByProject) {
+function taskSection(title, tasks, groupBy) {
   const section = element('section', 'action-list-section');
   const heading = element('div', 'task-group-heading');
   heading.append(element('h3', '', title), chip(tasks.length, 'chip-neutral'));
@@ -517,16 +552,23 @@ function taskSection(title, tasks, groupByProject) {
       : 'Project action items appear here.'));
     return section;
   }
-  if (!groupByProject) {
+  if (!groupBy) {
     tasks.forEach(task => section.appendChild(taskRow(task)));
     return section;
   }
-  [...new Set(tasks.map(task => task.projectId))]
-    .sort((left, right) => (projectById(left)?.name || '').localeCompare(projectById(right)?.name || ''))
-    .forEach(projectId => {
+  const groupKeys = [...new Set(tasks.map(task => groupBy === 'project' ? task.projectId : task.initiative))];
+  groupKeys
+    .sort((left, right) => {
+      const leftLabel = groupBy === 'project' ? projectById(left)?.name || '' : left || '';
+      const rightLabel = groupBy === 'project' ? projectById(right)?.name || '' : right || '';
+      return leftLabel.localeCompare(rightLabel);
+    })
+    .forEach(groupKey => {
       const group = element('div', 'action-project-group');
-      group.appendChild(element('h4', '', projectById(projectId)?.name || 'Former project'));
-      tasks.filter(task => task.projectId === projectId).forEach(task => group.appendChild(taskRow(task)));
+      const label = groupBy === 'project' ? projectById(groupKey)?.name || 'Former project' : groupKey;
+      group.appendChild(element('h4', '', label));
+      tasks.filter(task => (groupBy === 'project' ? task.projectId : task.initiative) === groupKey)
+        .forEach(task => group.appendChild(taskRow(task)));
       section.appendChild(group);
     });
   return section;
@@ -535,7 +577,10 @@ function taskSection(title, tasks, groupByProject) {
 function renderAssignmentTargets() {
   const actor = currentActor();
   const wrapper = element('section', 'task-assignment-panel');
-  wrapper.appendChild(element('strong', '', 'Drag an action to assign'));
+  wrapper.append(
+    element('strong', '', 'Assign available actions'),
+    element('span', '', 'Drag an unassigned action card onto a queue, or use “Assign to me” or the assignee menu on the action.')
+  );
   if (!actor) {
     wrapper.appendChild(element('span', '', isSetupMode()
       ? 'Add a roster identity before assigning work.'
@@ -568,7 +613,9 @@ function renderAssignmentTargets() {
 
 function taskRow(task) {
   const row = element('article', `task-row priority-${(task.priority || 'medium').toLowerCase()}`);
-  row.draggable = Boolean(currentActor() && (!task.assigneeId || canManageTask(task)));
+  row.draggable = Boolean(currentActor()
+    && (task.sourceType !== 'Takeoff' || task.budgetHours > 0)
+    && (!task.assigneeId || canManageTask(task)));
   row.addEventListener('dragstart', event => {
     draggedActionItemId = task.id;
     event.dataTransfer.effectAllowed = 'move';
@@ -582,6 +629,7 @@ function taskRow(task) {
   const top = element('div', 'task-title-row');
   top.append(
     element('strong', '', task.title),
+    ...(task.sourceType === 'Initiative' ? [chip('Initiative', 'chip-info')] : []),
     chip(task.status, task.status === 'Done' ? 'chip-success' : task.status === 'Blocked' ? 'chip-danger' : 'chip-neutral'),
     chip(task.priority, priorityClass(task.priority))
   );
@@ -589,10 +637,12 @@ function taskRow(task) {
   const variance = getTaskVariance(task);
   const result = variance >= 0 ? `${formatHours(variance)}h gain` : `${formatHours(Math.abs(variance))}h loss`;
   main.append(top, element('span', '', [
-    projectById(task.projectId)?.name || 'Unutilized',
+    projectById(task.projectId)?.name || task.initiative || 'Unutilized',
     task.workGroup,
     employeeById(task.assigneeId)?.name || 'Unassigned',
-    `${formatHours(actual)} / ${formatHours(task.budgetHours)} budget hrs`,
+    task.budgetHours > 0
+      ? `${formatHours(actual)} / ${formatHours(task.budgetHours)} budget hrs`
+      : task.sourceType === 'Takeoff' ? 'Hour estimate required before assignment' : 'Hour estimate not set',
     task.progress >= 100 ? result : `${task.progress}% complete`,
     task.plannedWeekKey ? `Week of ${task.plannedWeekKey}` : 'Week not planned'
   ].join(' · ')));
@@ -601,6 +651,8 @@ function taskRow(task) {
     chip(`WBS: ${task.wbs || 'Not set'}`, task.wbs ? 'chip-info' : 'chip-warning'),
     chip(`IO: ${task.io || 'Not set'}`, task.io ? 'chip-info' : 'chip-warning')
   );
+  if (task.reviewerName) codes.appendChild(chip(`Reviewer: ${task.reviewerName}`, 'chip-neutral'));
+  if (task.sourceStatus) codes.appendChild(chip(`Source: ${task.sourceStatus}`, 'chip-neutral'));
   main.appendChild(codes);
   const progressTrack = element('div', 'progress-track task-progress');
   const progressFill = element('div', 'progress-fill');
@@ -608,6 +660,22 @@ function taskRow(task) {
   progressTrack.appendChild(progressFill);
   main.appendChild(progressTrack);
   if (task.description) main.appendChild(element('p', '', task.description));
+  if (task.sourceType === 'Initiative') {
+    const sourceMeta = [task.discipline, task.category, task.deliverable, task.sourceDue || task.dueQuarter]
+      .filter(Boolean).join(' · ');
+    if (sourceMeta) main.appendChild(element('p', 'task-source-meta', sourceMeta));
+    if (!task.assigneeId && task.sourceAssigneeName) {
+      main.appendChild(element('p', 'task-source-meta', `Source assignment: ${task.sourceAssigneeName}`));
+    }
+    if (task.sourceNotes) {
+      const sourceNotes = element('details', 'task-note-preview');
+      sourceNotes.append(
+        element('summary', '', 'Imported source notes'),
+        element('p', 'task-source-notes', task.sourceNotes)
+      );
+      main.appendChild(sourceNotes);
+    }
+  }
   if (task.notes?.length) {
     const notes = element('details', 'task-note-preview');
     notes.appendChild(element('summary', '', `Notes (${task.notes.length})`));
@@ -656,6 +724,7 @@ function renderRoster() {
   const wrapper = element('div', 'workspace-view');
   const heading = viewHeading('Department roster', 'DM → ADM → Estimator reporting structure. Project leads are derived from project ownership.');
   if (canAddRosterMember()) heading.appendChild(actionButton('Add roster member', () => openRosterForm()));
+  if (canAddRosterMember()) heading.appendChild(actionButton('Import roster CSV', importRosterCsv, 'secondary-button'));
   heading.appendChild(actionButton('Roster CSV template', () => window.open('./data/roster.csv', '_blank', 'noopener'), 'secondary-button'));
   wrapper.appendChild(heading);
   if (!data.employees.length) {
@@ -699,10 +768,11 @@ function renderPeople() {
   const wrapper = element('div', 'workspace-view');
   wrapper.append(viewHeading('People operations', 'Profiles, leave, check-ins, goals, and one-on-ones in one place.'));
   const grid = element('div', 'people-grid');
-  [...data.employees]
+  const people = peopleBelowActor();
+  [...people]
     .sort((left, right) => Number(left.active === false) - Number(right.active === false) || left.name.localeCompare(right.name))
     .forEach(employee => grid.appendChild(peopleCard(employee)));
-  if (!data.employees.length) grid.appendChild(emptyState('No employees yet', 'Add employees in the planner to build team profiles.'));
+  if (!people.length) grid.appendChild(emptyState('No people in your scope', 'This page only shows active roster members below you in your district.'));
   wrapper.appendChild(grid);
   return wrapper;
 }
@@ -791,8 +861,7 @@ function openProjectForm(project) {
     eyebrow: 'Project portfolio',
     title: `Edit ${project.name}`,
     fields: [
-      field('ownerId', 'Project lead', 'select', project.ownerId, [['', 'Unassigned'], ...activeEmployees().filter(employee => employee.rosterRole === 'Estimator').map(employee => [employee.id, employee.name])]),
-      field('discipline', 'Primary discipline', 'select', project.discipline, DISTRICTS),
+      field('ownerId', 'Project owner / discipline manager', 'select', project.ownerId, [['', 'Unassigned'], ...activeEmployees().filter(employee => employee.rosterRole !== 'DM').map(employee => [employee.id, `${employee.name} · ${employee.rosterRole} · ${employee.district}`])]),
       field('priority', 'Priority', 'select', project.priority, PRIORITIES),
       field('health', 'Health', 'select', project.health, PROJECT_HEALTH),
       field('startDate', 'Start date', 'date', project.startDate),
@@ -805,6 +874,9 @@ function openProjectForm(project) {
         return false;
       }
       Object.assign(project, values);
+      project.discipline = 'E&I';
+      data.tasks.filter(task => task.projectId === project.id && task.sourceType === 'Takeoff')
+        .forEach(task => { task.scopeOwnerId = project.ownerId; });
       if (project.health === 'Complete') project.category = 'Complete';
       commit('Project', `${project.name} delivery details updated.`, 'project', project.id);
       return true;
@@ -826,9 +898,7 @@ function openTaskForm(task = null) {
     ...projects.map(project => [project.id, project.name])
   ];
   const defaultProjectId = task?.projectId || (allowUnutilized ? '' : projects[0]?.id || '');
-  const projectDiscipline = projectById(defaultProjectId)?.discipline;
-  const defaultWorkGroup = task?.workGroup
-    || (projectDiscipline === 'Instrumentation' ? 'Instrumentation' : 'Electrical');
+  const defaultWorkGroup = task?.workGroup || 'Electrical';
   const scopeCandidates = isSetupMode()
     ? activeEmployees()
     : actor ? activeEmployees().filter(employee => employee.id === actor.id || getEmployeeDescendantIds(actor.id).has(employee.id)) : [];
@@ -856,10 +926,6 @@ function openTaskForm(task = null) {
         inputs.get('io').value = defaultIoFor(inputs.get('projectId').value, inputs.get('workGroup').value);
       };
       inputs.get('projectId').addEventListener('change', () => {
-        const discipline = projectById(inputs.get('projectId').value)?.discipline;
-        if (discipline === 'Electrical' || discipline === 'Instrumentation') {
-          inputs.get('workGroup').value = discipline;
-        }
         updateIo();
       });
       inputs.get('workGroup').addEventListener('change', updateIo);
@@ -893,6 +959,7 @@ function openTaskForm(task = null) {
         Object.assign(task, values);
         if (task.status === 'Done') task.progress = 100;
         if (task.progress >= 100) task.status = 'Done';
+        syncTakeoffChecklist(task);
         commit('Task', `${task.title} updated.`, 'task', task.id);
       } else {
         const created = {
@@ -952,6 +1019,7 @@ function openTaskWorkForm(task) {
       task.progress = progress;
       task.status = progress >= 100 ? 'Done' : 'In progress';
       task.updatedAt = new Date().toISOString();
+      syncTakeoffChecklist(task);
       const variance = getTaskVariance(task);
       const outcome = progress >= 100
         ? ` with a ${formatHours(Math.abs(variance))} hour ${variance >= 0 ? 'gain' : 'loss'}`
@@ -1230,6 +1298,58 @@ function defaultIoFor(projectId, workGroup) {
   return projectId ? DEFAULT_IO[workGroup] || DEFAULT_IO.Electrical : DEFAULT_IO.Unutilized;
 }
 
+function syncTakeoffChecklist(task) {
+  if (task.sourceType !== 'Takeoff' || !task.sourceChecklistId) return;
+  const project = projectById(task.projectId);
+  const item = project?.checklist.find(candidate => candidate.id === task.sourceChecklistId);
+  if (!item) return;
+  item.complete = task.progress >= 100;
+  item.completedAt = item.complete ? new Date().toISOString() : '';
+  item.completedById = item.complete ? currentActor()?.id || '' : '';
+}
+
+function importRosterCsv() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.csv,text/csv';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const result = applyRosterCsv(await file.text(), file.name);
+      showToast(`Roster imported: ${result.added} added, ${result.updated} updated.`, 4000);
+      renderEmployees();
+      renderJobs();
+      forceChartUpdate();
+      renderWorkspace();
+    } catch (error) {
+      showToast(error.message || 'The roster CSV could not be imported.', 4000);
+    }
+  }, { once: true });
+  input.click();
+}
+
+function importActionItemsCsv() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.csv,text/csv';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const result = applyActionItemsCsv(await file.text(), file.name);
+      showToast(`Action items imported: ${result.added} added, ${result.updated} updated.`, 4000);
+      renderEmployees();
+      renderJobs();
+      forceChartUpdate();
+      renderWorkspace();
+    } catch (error) {
+      showToast(error.message || 'The action-item CSV could not be imported.', 4000);
+    }
+  }, { once: true });
+  input.click();
+}
+
 function field(name, label, type, value = '', options = null, required = false) {
   return { name, label, type, value, options, required };
 }
@@ -1417,11 +1537,77 @@ function canManageTask(task) {
   return isSetupMode() || canManageActionItem(currentActor()?.id, task);
 }
 
-function manageableProjects() {
+function peopleBelowActor() {
+  if (isSetupMode()) return activeEmployees();
+  const actor = currentActor();
+  if (!actor) return [];
+  const descendants = getEmployeeDescendantIds(actor.id);
+  return activeEmployees().filter(employee =>
+    descendants.has(employee.id) && isInManagerDistrict(actor, employee)
+  );
+}
+
+function visibleProjects() {
   if (isSetupMode()) return [...data.jobs];
   const actor = currentActor();
   if (!actor) return [];
-  return data.jobs.filter(project => canManageActionItem(actor.id, { projectId: project.id }));
+  if (actor.rosterRole === 'DM') return [...data.jobs];
+  const scopedIds = new Set([
+    actor.id,
+    ...peopleBelowActor().map(employee => employee.id)
+  ]);
+  return data.jobs.filter(project => {
+    if (project.ownerId === actor.id || scopedIds.has(project.ownerId)) return true;
+    if (data.tasks.some(task =>
+      task.projectId === project.id
+      && (task.assigneeId === actor.id
+        || scopedIds.has(task.assigneeId)
+        || task.scopeOwnerId === actor.id
+        || scopedIds.has(task.scopeOwnerId))
+    )) return true;
+    return Object.values(data.assignments).some(week =>
+      Boolean(week?.[actor.id]?.[project.id])
+    );
+  });
+}
+
+function visibleAlerts() {
+  if (isSetupMode()) return getAlerts();
+  const actor = currentActor();
+  if (!actor) return [];
+  const employeeIds = new Set(peopleBelowActor().map(employee => employee.id));
+  const projectIds = new Set(visibleProjects().map(project => project.id));
+  return getAlerts().filter(alert => {
+    if (alert.entityType === 'employee') {
+      return getViewerLevel(actor.id) === 'Manager'
+        ? employeeIds.has(alert.entityId)
+        : alert.entityId === actor.id;
+    }
+    if (alert.entityType === 'project') return projectIds.has(alert.entityId);
+    if (alert.entityType === 'task') {
+      const task = data.tasks.find(candidate => candidate.id === alert.entityId);
+      return Boolean(task && isTaskVisibleToViewer(task));
+    }
+    return false;
+  });
+}
+
+function canEditProject(project) {
+  if (isSetupMode()) return true;
+  const actor = currentActor();
+  return Boolean(actor
+    && getViewerLevel(actor.id) === 'Manager'
+    && visibleProjects().some(candidate => candidate.id === project.id));
+}
+
+function manageableProjects() {
+  const actor = currentActor();
+  if (isSetupMode()) return [...data.jobs];
+  if (!actor) return [];
+  return visibleProjects().filter(project =>
+    getViewerLevel(actor.id) === 'Manager'
+    || canManageActionItem(actor.id, { projectId: project.id })
+  );
 }
 
 function delegatableEmployees() {
@@ -1434,7 +1620,7 @@ function delegatableEmployees() {
     );
   }
   const ids = new Set([actor.id, ...getEmployeeDescendantIds(actor.id)]);
-  return activeEmployees().filter(employee => ids.has(employee.id));
+  return activeEmployees().filter(employee => ids.has(employee.id) && isInManagerDistrict(actor, employee));
 }
 
 function eligibleAssignees(task) {

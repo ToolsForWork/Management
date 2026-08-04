@@ -15,9 +15,7 @@ import {
   getEffectiveEmployeeCapacity,
   copyWeekAssignments,
   hasAssignmentsForWeek,
-  recordActivity,
-  uuid,
-  DISTRICTS
+  recordActivity
 } from './data.js';
 import { renderWeekLabel, forceChartUpdate } from './charts.js';
 import {
@@ -31,6 +29,8 @@ import {
 } from './ui.js';
 import { initializeWorkspace, refreshWorkspaceSummary } from './workspace.js';
 import { initializeVerifiedIdentity } from './auth.js';
+import { autoLoadRoster } from './roster.js';
+import { autoLoadActionItems } from './actionItems.js';
 
 const THEME_KEY = 'planner-theme';
 
@@ -48,6 +48,7 @@ async function initialize() {
   initializeTheme();
   if (!tryLoadFromHash(showToast)) loadFromLocalStorage();
   await autoLoadRoster();
+  await autoLoadActionItems();
   const verifiedIdentity = await initializeVerifiedIdentity(data.employees);
   if (verifiedIdentity) data.currentUserId = verifiedIdentity.employeeId;
   wireMenus();
@@ -73,91 +74,6 @@ async function initialize() {
   );
 
   window.addEventListener('resize', forceChartUpdate);
-}
-
-async function autoLoadRoster() {
-  if (data.employees.length) return false;
-  try {
-    const response = await fetch('./data/roster.csv', { cache: 'no-store' });
-    if (!response.ok) return false;
-    const rows = parseCsv(await response.text());
-    if (rows.length < 2) return false;
-    const headers = rows[0].map(value => value.trim().toLowerCase());
-    const records = rows.slice(1)
-      .map(row => Object.fromEntries(headers.map((header, index) => [header, String(row[index] || '').trim()])))
-      .filter(record => record.name);
-    if (!records.length) return false;
-
-    const imported = records.map(record => ({
-      id: uuid(),
-      name: record.name,
-      weeklyBudget: 40,
-      district: DISTRICTS.includes(record.group) ? record.group : 'Electrical',
-      rosterRole: ['DM', 'ADM'].includes(record.role) ? record.role : 'Estimator',
-      managerId: '',
-      reportsToName: record['reports to'] || '',
-      email: record.email || '',
-      collapsed: false,
-      active: true,
-      archivedAt: '',
-      title: '',
-      phone: '',
-      skills: [],
-      hireDate: '',
-      managerNotes: ''
-    }));
-    const byName = new Map(imported.map(employee => [employee.name.toLowerCase(), employee]));
-    const dm = imported.find(employee => employee.rosterRole === 'DM');
-    const adms = imported.filter(employee => employee.rosterRole === 'ADM');
-    imported.forEach(employee => {
-      const explicitManager = byName.get(employee.reportsToName.toLowerCase());
-      if (employee.rosterRole === 'ADM') employee.managerId = explicitManager?.id || dm?.id || '';
-      if (employee.rosterRole === 'Estimator') {
-        employee.managerId = explicitManager?.id
-          || adms.find(adm => adm.district === employee.district)?.id
-          || adms[0]?.id
-          || dm?.id
-          || '';
-      }
-      delete employee.reportsToName;
-    });
-    data.employees.push(...imported);
-    data.currentUserId = dm?.id || '';
-    recordActivity('Roster', `${imported.length} roster members loaded from data/roster.csv.`);
-    scheduleSave();
-    return true;
-  } catch (error) {
-    console.warn('Roster template could not be loaded:', error);
-    return false;
-  }
-}
-
-function parseCsv(text) {
-  const rows = [];
-  let row = [];
-  let value = '';
-  let quoted = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (character === '"') {
-      if (quoted && text[index + 1] === '"') {
-        value += '"';
-        index += 1;
-      } else quoted = !quoted;
-    } else if (character === ',' && !quoted) {
-      row.push(value);
-      value = '';
-    } else if ((character === '\n' || character === '\r') && !quoted) {
-      if (character === '\r' && text[index + 1] === '\n') index += 1;
-      row.push(value);
-      if (row.some(cell => cell.trim())) rows.push(row);
-      row = [];
-      value = '';
-    } else value += character;
-  }
-  row.push(value);
-  if (row.some(cell => cell.trim())) rows.push(row);
-  return rows;
 }
 
 function wireMenus() {
