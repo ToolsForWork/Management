@@ -34,6 +34,7 @@
         </div>
 
         <div class="header-actions">
+            <span id="teamSyncStatus" class="team-sync-status local" role="status" title="This browser is using local data">Local only</span>
             <button type="button" id="workspaceBtn" class="workspace-btn">
                 Workspace
                 <span id="workspaceAlertBadge" class="alert-badge" aria-label="No management alerts">✓</span>
@@ -45,6 +46,7 @@
                 <button type="button" id="exportAllCsvBtn" role="menuitem">Export all weeks (.csv)</button>
                 <button type="button" id="exportJsonBtn" role="menuitem">Export backup (.json)</button>
                 <button type="button" id="copyShareLinkBtn" role="menuitem">Copy snapshot link</button>
+                <button type="button" id="refreshSharedBtn" role="menuitem">Refresh team data</button>
                 <button type="button" id="importBtn" role="menuitem">Import backup</button>
                 <input type="file" id="importJsonInput" accept=".json" hidden>
             </div>

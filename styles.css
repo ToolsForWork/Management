@@ -235,9 +235,37 @@ header {
 
 .header-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
 }
+
+.team-sync-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  color: #cbd5e1;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.team-sync-status::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #94a3b8;
+  content: '';
+}
+
+.team-sync-status.current::before { background: #34d399; }
+.team-sync-status.syncing::before { background: #60a5fa; }
+.team-sync-status.conflict::before,
+.team-sync-status.offline::before { background: #f87171; }
 
 .file-btn {
   min-width: 60px;
@@ -955,6 +983,35 @@ header {
   margin: 0;
   font-size: 18px;
   letter-spacing: -0.025em;
+}
+
+.removed-roster-members {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.removed-roster-members summary {
+  padding: 10px 12px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+
+.removed-roster-list {
+  display: grid;
+  gap: 6px;
+  padding: 0 12px 12px;
+}
+
+.removed-roster-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
 }
 
 .workspace-close {
