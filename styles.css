@@ -912,14 +912,14 @@ header {
   padding: 0 5px;
   place-items: center;
   border-radius: 999px;
-  background: #ef4444;
+  background: #64748b;
   color: #fff;
   font-size: 10px;
   font-weight: 800;
 }
 
-.alert-badge.hidden {
-  display: none;
+.alert-badge.attention {
+  background: #ef4444;
 }
 
 .workspace-open {
@@ -1596,6 +1596,15 @@ header {
 
 .task-note-row .icon-button {
   flex: 0 0 auto;
+}
+
+.task-source-meta {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.task-source-notes {
+  white-space: pre-wrap;
 }
 
 .hours-summary {
