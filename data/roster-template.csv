@@ -1,0 +1,6 @@
+Name,Role,Group,Reports To,Email
+Taylor Morgan,DM,E&I,,taylor.morgan@example.com
+Jordan Lee,ADM,Electrical,Taylor Morgan,jordan.lee@example.com
+Casey Patel,ADM,Instrumentation,Taylor Morgan,casey.patel@example.com
+Riley Chen,Estimator,Electrical,Jordan Lee,riley.chen@example.com
+Alex Johnson,Estimator,Instrumentation,Casey Patel,alex.johnson@example.com
